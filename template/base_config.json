@@ -10,10 +10,10 @@
         "use_cpu": false
     },
     "model": {
-        "name": "HuggingFaceTB/SmolLM-360M-Instruct",
-        "num_hidden_layers": 16,
-        "num_attention_heads": 16,
-        "num_key_value_heads": 4,
+        "name": "JackFram/llama-160m",
+        "num_hidden_layers": 12,
+        "num_attention_heads": 12,
+        "num_key_value_heads": 12,
         "dtype": "bfloat16",
         "use_flash_attention": true,
         "use_fused_adam": true
@@ -42,12 +42,12 @@
     "logging": {
         "use_wandb": false,
         "project_name": "picotron",
-        "run_name": null
+        "run_name": null,
+        "log_frequency": 10
     },
     "environment": {
         "OMP_NUM_THREADS": "1",
         "TOKENIZERS_PARALLELISM": "false",
-        "FLASH_ATTEN": "1",
-        "HF_TOKEN": null
+        "FLASH_ATTEN": "1"
     }
 }

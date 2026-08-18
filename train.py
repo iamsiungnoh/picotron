@@ -23,7 +23,6 @@ from picotron.process_group_manager import setup_process_group_manager
 from picotron.pipeline_parallel.pipeline_parallel import train_step_pipeline_1f1b, train_step_pipeline_afab, PipelineParallel
 from picotron.data_parallel.data_parallel import DataParallelBucket
 from picotron.model import Llama
-from picotron.utils import download_model
 import wandb
 
 def train_step(model, data_loader, device):
@@ -61,19 +60,16 @@ if __name__ == "__main__":
 
     with open(args.config, "r") as f:
         config = json.load(f)
+
+    log_frequency = config["logging"].get("log_frequency", 10)
+    if log_frequency < 1:
+        raise ValueError(f"log_frequency must be positive, got {log_frequency}")
     
     os.environ["OMP_NUM_THREADS"] = config["environment"]["OMP_NUM_THREADS"]
     os.environ["TOKENIZERS_PARALLELISM"] = config["environment"]["TOKENIZERS_PARALLELISM"]
     os.environ["FLASH_ATTEN"] = config["environment"]["FLASH_ATTEN"]
     os.environ["CONTEXT_PARALLEL_MODE"] = config["distributed"].get("cp_mode", "ring")
     os.environ["DEVICE"] = "cpu" if config["distributed"]["use_cpu"] else "cuda"
-    if config["environment"].get("HF_TOKEN") is None:
-        if "HF_TOKEN" not in os.environ: raise ValueError("HF_TOKEN is neither set in the config file nor in the environment")
-    else:
-        if "HF_TOKEN" not in os.environ:
-            os.environ["HF_TOKEN"] = config["environment"]["HF_TOKEN"]
-        else:
-            print("Warning: HF_TOKEN is set in the environment and the config file. Using the environment variable.")
     dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() and not config["distributed"]["use_cpu"] else torch.float32
     assert (dtype == torch.bfloat16 and os.getenv("FLASH_ATTEN") == "1") or os.getenv("FLASH_ATTEN") != "1", "Kernel operations requires dtype=torch.bfloat16"
 
@@ -117,12 +113,6 @@ if __name__ == "__main__":
         subset_name=config["dataset"].get("subset_name", None),
         split=config["dataset"].get("split", "train")
     )
-
-    # download model on the first rank, assume all ranks have access to the same filesystem
-    if pgm.process_group_manager.global_rank == 0:
-        download_model(config["model"]["name"], os.environ["HF_TOKEN"])
-
-    dist.barrier()
 
     print(f"init dataloader time: {time.time()-start_time:.2f}s", is_print_rank=is_wandb_rank)
     tokens_per_step = data_loader.global_batch_size * config["training"]["seq_length"]
@@ -181,7 +171,7 @@ if __name__ == "__main__":
         if pgm.process_group_manager.pp_world_size > 1:
             model = PipelineParallel(model, model_config)
 
-    model = init_model_with_materialized_weights(model, model_config, save_dir=f"./hf_model_safetensors/")
+    model = init_model_with_materialized_weights(model)
 
     #TODO: load existing checkpoint here to continue pre-training
 
@@ -219,7 +209,15 @@ if __name__ == "__main__":
     dist.barrier()
     
     while config["training"]["max_tokens"] is None or trained_tokens < config["training"]["max_tokens"]:
-        step_start_time = time.time()
+        should_log = (step + 1) % log_frequency == 0
+        if is_wandb_rank and should_log:
+            if device.type == "cuda":
+                step_start_event = torch.cuda.Event(enable_timing=True)
+                step_end_event = torch.cuda.Event(enable_timing=True)
+                step_start_event.record()
+            else:
+                step_start_time = time.perf_counter()
+
         optimizer.zero_grad()
         
         if pgm.process_group_manager.pp_world_size > 1:
@@ -241,16 +239,23 @@ if __name__ == "__main__":
         if hasattr(model, 'reset'):
             model.reset()
 
-        step_duration = time.time() - step_start_time
-        tokens_per_second = tokens_per_step / step_duration
-        tokens_per_second_per_gpu = tokens_per_second / world_size
-        mfu = get_mfu(tokens_per_second_per_gpu, num_params, model_config)
-        
-        if is_wandb_rank:
+        if is_wandb_rank and should_log:
+            if device.type == "cuda":
+                step_end_event.record()
+                step_end_event.synchronize()
+                step_duration_ms = step_start_event.elapsed_time(step_end_event)
+            else:
+                step_duration_ms = (time.perf_counter() - step_start_time) * 1000
+
+            tokens_per_second = tokens_per_step / (step_duration_ms / 1000)
+            tokens_per_second_per_gpu = tokens_per_second / world_size
+            mfu = get_mfu(tokens_per_second_per_gpu, num_params, model_config)
+
             print(
                 f"[rank {pgm.process_group_manager.global_rank}] "
                 f"Step: {step:<5d} | "
                 f"Loss: {loss:6.4f} | "
+                f"Time/step: {step_duration_ms:7.2f}ms | "
                 f"Global batch size: {to_readable_format(tokens_per_step):>7s} | "
                 f"Tokens/s: {to_readable_format(tokens_per_second):>7s} | "
                 f"Tokens/s/GPU: {to_readable_format(tokens_per_second_per_gpu):>7s} | "
@@ -263,8 +268,9 @@ if __name__ == "__main__":
             if config["logging"]["use_wandb"]:
                 wandb.log({
                     "loss": loss,
+                    "step_duration_ms": step_duration_ms,
                     "tokens_per_step": tokens_per_step,
-                    "tokens_per_second": tokens_per_step / step_duration,
+                    "tokens_per_second": tokens_per_second,
                     "mfu": mfu,
                     "tokens_per_second_per_gpu": tokens_per_second_per_gpu,
                     "memory_usage": torch.cuda.memory_reserved() / 1e9,
