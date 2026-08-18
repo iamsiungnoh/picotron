@@ -146,9 +146,12 @@ class Attention(nn.Module):
         
         # TODO: replace everything with flex attention
         if os.getenv('CONTEXT_PARALLEL', '0') == '1':
-            # Ring attention for context parallelism
-            sm_scale = 1.0 / (q.size(-1) ** 0.5)
-            out = context_parallel.ring_attention(q, k, v, sm_scale, causal).transpose(1, 2) # [batch_size, seq_length, num_heads, head_dim]
+            cp_mode = os.getenv('CONTEXT_PARALLEL_MODE', 'ring')
+            if cp_mode == 'ring':
+                sm_scale = 1.0 / (q.size(-1) ** 0.5)
+                out = context_parallel.ring_attention(q, k, v, sm_scale, causal).transpose(1, 2)
+            elif cp_mode == 'headwise':
+                out = context_parallel.headwise_attention(q, k, v, causal).transpose(1, 2) # [batch_size, seq_length, num_heads, head_dim]
         elif os.getenv('FLASH_ATTEN', '1') == '1':
             # flash attention, this is faster! 
             out = flash_attention(q, k, v, causal = causal) # [batch_size, seq_length, num_heads, head_dim] 

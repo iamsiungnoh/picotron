@@ -7,6 +7,62 @@ import picotron.process_group_manager as pgm
 
 STEP, VERBOSE = 0, os.environ.get("VERBOSE", "0") == "1"
 
+####################################################################################
+###                 Given AlltoALL implementation, do not modify                 ###
+####################################################################################
+
+def _all_to_all(input_, group):
+    """Perform an equal-split all-to-all exchange along dimension 0."""
+    world_size = dist.get_world_size(group=group)
+    if world_size == 1:
+        return input_
+
+    if input_.size(0) % world_size != 0:
+        raise ValueError(
+            f"Dimension 0 with size {input_.size(0)} must be divisible "
+            f"by the context-parallel world size ({world_size})"
+        )
+
+    send_buffer = torch.empty(
+        input_.shape, dtype=input_.dtype, device=input_.device
+    )
+    send_buffer.copy_(input_)
+    recv_buffer = torch.empty(
+        input_.shape, dtype=input_.dtype, device=input_.device
+    )
+    dist.all_to_all_single(recv_buffer, send_buffer, group=group)
+    return recv_buffer
+
+
+class AllToAll(torch.autograd.Function):
+    """Autograd-aware equal-split all-to-all collective."""
+
+    @staticmethod
+    def forward(ctx, input_, group):
+        ctx.group = group
+        return _all_to_all(input_, group)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return _all_to_all(grad_output, ctx.group), None
+
+
+def all_to_all(input_, group=None):
+    """
+    Exchange equal-sized dimension-0 chunks across context-parallel ranks.
+
+    The caller is responsible for packing the input so dimension 0 contains
+    one chunk for each destination rank. Received chunks are ordered by source
+    rank along dimension 0. Backward performs the same exchange in reverse.
+    """
+    if group is None:
+        group = pgm.process_group_manager.cp_group
+    return AllToAll.apply(input_, group)
+
+####################################################################################
+###                     END of Given AlltoALL implementation.                    ###
+####################################################################################
+
 class ContextCommunicate:
     def __init__(self, msg: str = ""):
         global STEP

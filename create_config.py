@@ -27,6 +27,7 @@ def create_single_config(
     seq_len: int,
     subset_name: Optional[str],
     exp_name: str,
+    cp_mode: str = "ring",
     use_wandb: bool = False,
     use_cpu: bool = False,
     use_fused_adam: bool = False,
@@ -57,6 +58,7 @@ def create_single_config(
 
     config_content['distributed']['tp_size'] = tp
     config_content['distributed']['cp_size'] = cp
+    config_content['distributed']['cp_mode'] = cp_mode
     config_content['distributed']['dp_size'] = dp
     config_content['distributed']['pp_size'] = pp
     config_content['distributed']['pp_engine'] = pp_engine
@@ -88,6 +90,7 @@ if __name__ == "__main__":
     parser.add_argument("--out_dir", type=str, help="Output directory to store the configs", default="tmp")
     parser.add_argument("--tp", type=int, help="number of tensor parallelism", default=1)
     parser.add_argument("--cp", type=int, help="number of context parallelism", default=1)
+    parser.add_argument("--cp_mode", choices=["ring", "headwise"], help="context parallel attention implementation", default="ring")
     parser.add_argument("--dp", type=int, help="number of data parallelism", default=1)
     parser.add_argument("--pp", type=int, help="number of pipeline parallelism", default=1)
     parser.add_argument("--pp_engine", type=str, help="pipeline parallel engine", default="1f1b")
@@ -111,6 +114,7 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         tp=args.tp,
         cp=args.cp,
+        cp_mode=args.cp_mode,
         dp=args.dp,
         pp=args.pp,
         pp_engine=args.pp_engine,

@@ -65,6 +65,7 @@ if __name__ == "__main__":
     os.environ["OMP_NUM_THREADS"] = config["environment"]["OMP_NUM_THREADS"]
     os.environ["TOKENIZERS_PARALLELISM"] = config["environment"]["TOKENIZERS_PARALLELISM"]
     os.environ["FLASH_ATTEN"] = config["environment"]["FLASH_ATTEN"]
+    os.environ["CONTEXT_PARALLEL_MODE"] = config["distributed"].get("cp_mode", "ring")
     os.environ["DEVICE"] = "cpu" if config["distributed"]["use_cpu"] else "cuda"
     if config["environment"].get("HF_TOKEN") is None:
         if "HF_TOKEN" not in os.environ: raise ValueError("HF_TOKEN is neither set in the config file nor in the environment")
@@ -188,8 +189,9 @@ if __name__ == "__main__":
         model = apply_context_parallel(model)
 
     model.to(dtype).to(device)
-    
-    if pgm.process_group_manager.dp_world_size > 1:
+
+    # patch for gradient sync so that devices in the cp_dp_group will sync gradients
+    if pgm.process_group_manager.cp_dp_world_size > 1:
         model = DataParallelBucket(model)
     
     print(f"init model parallel time: {time.time()-start_time:.2f}s", is_print_rank=is_wandb_rank)

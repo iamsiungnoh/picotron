@@ -2,6 +2,7 @@
     "distributed": {
         "tp_size": 1,
         "cp_size": 1,
+        "cp_mode": "ring",
         "pp_size": 1,
         "dp_size": 1,
         "pp_engine": "1f1b",

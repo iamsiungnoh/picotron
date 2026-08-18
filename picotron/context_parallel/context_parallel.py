@@ -2,10 +2,12 @@
 import os
 import torch
 import torch.nn.functional as F
+from flash_attn.flash_attn_interface import flash_attn_func
 from typing import Any, Optional, Tuple
 
 import picotron.process_group_manager as pgm
-from picotron.context_parallel.cp_communications import ContextCommunicate
+# all_to_all added for implementing head
+from picotron.context_parallel.cp_communications import ContextCommunicate, all_to_all
 
 def apply_context_parallel(model):
     os.environ["CONTEXT_PARALLEL"] = "1" if pgm.process_group_manager.cp_world_size > 1 else "0"
@@ -193,3 +195,139 @@ def update_rope_for_context_parallel(cos, sin):
     size_per_partition = seq_len // cp_word_size
     start_idx, end_idx = cp_rank * size_per_partition, (cp_rank + 1) * size_per_partition
     return cos[start_idx:end_idx], sin[start_idx:end_idx]
+
+
+def sequence_to_head(x, group, cp_world_size):
+    """Redistribute [B, H, S/CP, D] to [B, H/CP, S, D]."""
+    batch_size, num_heads, local_seq_len, head_dim = x.shape
+    if num_heads % cp_world_size != 0:
+        raise ValueError(
+            f"Number of heads ({num_heads}) must be divisible by the "
+            f"context-parallel world size ({cp_world_size})"
+        )
+
+    local_num_heads = num_heads // cp_world_size
+
+    #####################################################################################
+    ###              TODO: Implement the sequence to head redistribution              ###
+    ###       Input shape: [B, H, S/CP, D] (Batch, Heads, Sequence, Hidden_dim)       ###
+    ###       Output shape: [B, H/CP, S, D] (Batch, Heads, Sequence, Hidden_dim)      ###
+    #####################################################################################
+
+    # Dimension 0 of the packed tensor identifies the destination rank.
+    x = x.reshape(
+        batch_size,
+        cp_world_size,
+        local_num_heads,
+        local_seq_len,
+        head_dim,
+    )
+    x = x.permute(1, 0, 2, 3, 4).contiguous()
+    x = all_to_all(x, group=group)
+
+    # Dimension 0 now identifies the source rank. Preserve that rank order
+    # while joining the received local sequence chunks.
+    x = x.permute(1, 2, 0, 3, 4).contiguous()
+    output =  x.reshape(
+        batch_size,
+        local_num_heads,
+        cp_world_size * local_seq_len,
+        head_dim,
+    )
+
+    ####################################################################################
+    ###                            END of Implementation.                            ###
+    ####################################################################################
+
+    return output
+
+
+def head_to_sequence(x, group, cp_world_size):
+    """Redistribute [B, H/CP, S, D] to [B, H, S/CP, D]."""
+    batch_size, local_num_heads, global_seq_len, head_dim = x.shape
+    if global_seq_len % cp_world_size != 0:
+        raise ValueError(
+            f"Sequence length ({global_seq_len}) must be divisible by the "
+            f"context-parallel world size ({cp_world_size})"
+        )
+
+    local_seq_len = global_seq_len // cp_world_size
+
+    #####################################################################################
+    ###              TODO: Implement the sequence to head redistribution              ###
+    ###       Input shape: [B, H/CP, S, D] (Batch, Heads, Sequence, Hidden_dim)       ###
+    ###       Output shape: [B, H, S/CP, D] (Batch, Heads, Sequence, Hidden_dim)      ###
+    #####################################################################################
+
+    # Send each sequence chunk back to the rank that originally owned it.
+    x = x.reshape(
+        batch_size,
+        local_num_heads,
+        cp_world_size,
+        local_seq_len,
+        head_dim,
+    )
+    x = x.permute(2, 0, 1, 3, 4).contiguous()
+    x = all_to_all(x, group=group)
+
+    # Received chunks are ordered by their source head rank. Join those chunks
+    # to restore all heads for this rank's local sequence.
+    x = x.permute(1, 0, 2, 3, 4).contiguous()
+    output =  x.reshape(
+        batch_size,
+        cp_world_size * local_num_heads,
+        local_seq_len,
+        head_dim,
+    )
+
+    ####################################################################################
+    ###                            END of Implementation.                            ###
+    ####################################################################################
+
+    return output
+
+def headwise_attention(q, k, v, is_causal):
+    return HeadwiseContextParallel.apply(q, k, v, is_causal)
+
+
+class HeadwiseContextParallel:
+    """Apply Ulysses context parallelism directly around attention."""
+
+    @staticmethod
+    def apply(q, k, v, is_causal):
+
+        group = pgm.process_group_manager.cp_group
+        cp_world_size = pgm.process_group_manager.cp_world_size
+
+        #######################################################################################
+        ###  TODO: Implement the forward pass of headwise context parallelism               ###
+        ###  Step 1: redistribute QKV                                                       ###
+        ###  Step 2: compute attention with redistributed QKV                               ###
+        ###         (flash_attn_func(q, k, v, causal=is_causal))                            ###
+        ###  Step 3: redistribute the output back to the original shape                     ###
+        #######################################################################################
+
+        q = sequence_to_head(q, group, cp_world_size)
+        k = sequence_to_head(k, group, cp_world_size)
+        v = sequence_to_head(v, group, cp_world_size)
+
+        # FlashAttention uses [batch, sequence, heads, head_dim].
+        q = q.transpose(1, 2).contiguous()
+        k = k.transpose(1, 2).contiguous()
+        v = v.transpose(1, 2).contiguous()
+
+        out = flash_attn_func(
+            q,
+            k,
+            v,
+            causal=is_causal,
+        )
+
+        out = out.transpose(1, 2).contiguous()
+        output = head_to_sequence(out, group, cp_world_size)
+
+        ####################################################################################
+        ###                            END of Implementation.                            ###
+        ####################################################################################
+
+        return output
