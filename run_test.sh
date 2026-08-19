@@ -3,8 +3,9 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 [-tp N] [-cp N] [-dp N] [-pp N] [-sp] [-cp-mode MODE]" >&2
-    echo "Example: $0 -tp 2 -sp" >&2
+    echo "Usage: $0 [-tp N] [-cp N] [-dp N] [-pp N] [-sp] [-cp-mode MODE] [FEATURE FLAGS]" >&2
+    echo "Feature flags: --vocab-padding-en --cp-seq-padding-en --fuse-qkv-en --cp-zigzag-en" >&2
+    echo "Example: $0 -tp 2 -sp --vocab-padding-en --fuse-qkv-en" >&2
 }
 
 TP_SIZE=1
@@ -13,6 +14,10 @@ DP_SIZE=1
 PP_SIZE=1
 CP_MODE=ring
 SEQUENCE_PARALLEL=false
+VOCAB_PADDING=false
+CP_SEQUENCE_PADDING=false
+FUSE_QKV=false
+CP_ZIGZAG=false
 MODEL_NAME=JackFram/llama-160m
 
 while [[ $# -gt 0 ]]; do
@@ -39,6 +44,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         -sp|--sequence-parallel)
             SEQUENCE_PARALLEL=true
+            shift
+            ;;
+        --vocab-padding-en|--vocab_padding_en)
+            VOCAB_PADDING=true
+            shift
+            ;;
+        --cp-seq-padding-en|--cp_seq_padding_en)
+            CP_SEQUENCE_PADDING=true
+            shift
+            ;;
+        --fuse-qkv-en|--fuse_qkv_en)
+            FUSE_QKV=true
+            shift
+            ;;
+        --cp-zigzag-en|--cp_zigzag_en)
+            CP_ZIGZAG=true
             shift
             ;;
         -cp-mode|-cp_mode)
@@ -81,6 +102,18 @@ CONFIG_NAME="${MODEL_TAG}_tp${TP_SIZE}_cp${CP_SIZE}_dp${DP_SIZE}_pp${PP_SIZE}_${
 if [[ "$SEQUENCE_PARALLEL" == true ]]; then
     CONFIG_NAME="${CONFIG_NAME}_sp"
 fi
+if [[ "$VOCAB_PADDING" == true ]]; then
+    CONFIG_NAME="${CONFIG_NAME}_vocabpad"
+fi
+if [[ "$CP_SEQUENCE_PADDING" == true ]]; then
+    CONFIG_NAME="${CONFIG_NAME}_cpseqpad"
+fi
+if [[ "$FUSE_QKV" == true ]]; then
+    CONFIG_NAME="${CONFIG_NAME}_fuseqkv"
+fi
+if [[ "$CP_ZIGZAG" == true ]]; then
+    CONFIG_NAME="${CONFIG_NAME}_zigzag"
+fi
 CONFIG_PATH="$SCRIPT_DIR/configs/$CONFIG_NAME/config.json"
 WORLD_SIZE=$((TP_SIZE * CP_SIZE * DP_SIZE * PP_SIZE))
 
@@ -100,6 +133,18 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     )
     if [[ "$SEQUENCE_PARALLEL" == true ]]; then
         CREATE_CONFIG_ARGS+=(--sequence_parallel)
+    fi
+    if [[ "$VOCAB_PADDING" == true ]]; then
+        CREATE_CONFIG_ARGS+=(--vocab_padding_en)
+    fi
+    if [[ "$CP_SEQUENCE_PADDING" == true ]]; then
+        CREATE_CONFIG_ARGS+=(--cp_seq_padding_en)
+    fi
+    if [[ "$FUSE_QKV" == true ]]; then
+        CREATE_CONFIG_ARGS+=(--fuse_qkv_en)
+    fi
+    if [[ "$CP_ZIGZAG" == true ]]; then
+        CREATE_CONFIG_ARGS+=(--cp_zigzag_en)
     fi
     python3 create_config.py "${CREATE_CONFIG_ARGS[@]}"
 fi

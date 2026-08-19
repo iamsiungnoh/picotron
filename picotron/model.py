@@ -141,6 +141,7 @@ class FuseQKVAttention(nn.Module):
     def forward(self, x, cos, sin, attention_mask=None, position_ids=None):
         batch_size, seq_length, hidden_dim = x.size()
         qkv = self.qkv_proj(x)  # [batch_size, seq_length, q_out + 2*kv_out], ONE matmul instead of three
+        batch_size, seq_length, _ = qkv.shape
         q, k, v = torch.split(qkv, self._qkv_split_sizes, dim=-1)
         if os.getenv('FLASH_ATTEN', '1') != '1':
             q = q.view(batch_size, seq_length, self.num_local_heads, self.head_dim).transpose(1, 2)       # [batch_size, num_heads, seq_length, head_dim]

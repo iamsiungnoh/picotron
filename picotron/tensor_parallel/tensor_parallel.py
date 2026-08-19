@@ -35,6 +35,7 @@ def apply_tensor_parallel(model, sequence_parallel=False):
             num_key_value_heads=attention_module.num_key_values,
             head_dim=attention_module.head_dim,
             bias=linear_layer.bias is not None,
+            sequence_parallel=sequence_parallel,
         )
         attention_module.qkv_proj = new_linear_layer
         # CHANGED: was the full (q_out, kv_out, kv_out) computed pre-TP;
@@ -623,10 +624,13 @@ class FusedQKVColumnParallelLinear(nn.Module):
         head_dim: int,
         bias: bool = False,
         async_all_reduce: bool = False,
+        sequence_parallel: bool = False,
     ) -> None:
         super().__init__()
         self.tp_world_size = pgm.process_group_manager.tp_world_size
         self.tp_rank = pgm.process_group_manager.tp_rank
+
+        self.sequence_parallel = sequence_parallel
 
         assert num_heads % self.tp_world_size == 0, \
             "num_attention_heads should be divisible by tp world size"
@@ -693,8 +697,13 @@ class FusedQKVColumnParallelLinear(nn.Module):
         self.weight.data = local_weight.contiguous()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.async_all_reduce:
+        if self.sequence_parallel:
+            input_parallel = GatherFromSequenceParallelRegion.apply(x)
+            output = F.linear(input_parallel, self.weight, self.bias)
+        elif self.async_all_reduce:
             output = linear_with_async_all_reduce(x, self.weight, self.bias)
         else:
             output = linear_with_all_reduce(x, self.weight, self.bias)
+        if self.gather_output:
+            output = GatherFromModelParallelRegion.apply(output)
         return output

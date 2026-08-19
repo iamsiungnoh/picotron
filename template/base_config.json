@@ -4,6 +4,7 @@
         "sequence_parallel": false,
         "cp_size": 1,
         "cp_mode": "ring",
+        "cp_seq_padding_en": false,
         "pp_size": 1,
         "dp_size": 1,
         "pp_engine": "1f1b",
@@ -16,7 +17,11 @@
         "num_attention_heads": 12,
         "num_key_value_heads": 12,
         "dtype": "bfloat16",
-        "use_flash_attention": true
+        "use_flash_attention": true,
+        "use_fused_adam": false,
+        "vocab_padding_en": false,
+        "fuse_qkv_en": false,
+        "cp_zigzag_en": false
     },
     "training": {
         "seed": 42,
@@ -43,7 +48,7 @@
         "use_wandb": false,
         "project_name": "picotron",
         "run_name": null,
-        "log_frequency": 10
+        "log_frequency": 1
     },
     "environment": {
         "OMP_NUM_THREADS": "1",
