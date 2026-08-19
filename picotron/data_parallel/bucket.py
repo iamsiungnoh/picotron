@@ -27,8 +27,17 @@ class Bucket:
         Launch an asynchronous all-reduce operation to synchronize gradients across processes.
         """
         assert self.handle is None
+        ####################################################################################
+        ###                TODO: Implement async gradient sync operations                ###
+        ###                1. average gradients                                          ###
+        ###                2. async all reduce (use async_op=True, use self.handle)      ###
+        ####################################################################################
         self.grad_data /= self.process_group_size
         self.handle = dist.all_reduce(self.grad_data, group=self.process_group, async_op=True)
+
+        ####################################################################################
+        ###                            END of Implementation.                            ###
+        ####################################################################################
     
     def reset(self) -> None:
         """
