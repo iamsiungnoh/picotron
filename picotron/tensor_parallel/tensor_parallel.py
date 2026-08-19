@@ -61,7 +61,7 @@ def apply_tensor_parallel(model, sequence_parallel=False):
                     in_features=linear_layer.in_features,
                     out_features=linear_layer.out_features,
                     bias=linear_layer.bias is not None,
-                    gather_output=args.get("gather_output", False)
+                    gather_output=args.get("gather_output", False),
                     sequence_parallel=sequence_parallel,
                 )
 

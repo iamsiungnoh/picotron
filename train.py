@@ -308,7 +308,6 @@ if __name__ == "__main__":
                 f"Tokens/s: {to_readable_format(tokens_per_second):>7s} | "
                 f"Tokens/s/GPU: {to_readable_format(tokens_per_second_per_gpu):>7s} | "
                 f"Tokens: {to_readable_format(trained_tokens):>7s}{('/' + to_readable_format(config['training']['max_tokens'])) if config['training']['max_tokens'] else ''} | "
-                f"Step time: {step_duration:6.2f}s | "
                 f"MFU: {mfu:5.2f}% | "
                 f"Memory usage: {torch.cuda.memory_reserved() / 1e9:6.2f}GB",
                 is_print_rank=is_wandb_rank
