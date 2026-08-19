@@ -27,6 +27,7 @@ def create_single_config(
     subset_name: Optional[str],
     exp_name: str,
     cp_mode: str = "ring",
+    sequence_parallel: bool = False,
     use_wandb: bool = False,
     use_cpu: bool = False,
     use_fused_adam: bool = False,
@@ -55,6 +56,7 @@ def create_single_config(
     del tmp_model_config
 
     config_content['distributed']['tp_size'] = tp
+    config_content['distributed']['sequence_parallel'] = sequence_parallel
     config_content['distributed']['cp_size'] = cp
     config_content['distributed']['cp_mode'] = cp_mode
     config_content['distributed']['dp_size'] = dp
@@ -87,6 +89,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--out_dir", type=str, help="Output directory to store the configs", default="tmp")
     parser.add_argument("--tp", type=int, help="number of tensor parallelism", default=1)
+    parser.add_argument("--sequence_parallel", action="store_true", help="Shard sequence-dependent activations across tensor-parallel ranks")
     parser.add_argument("--cp", type=int, help="number of context parallelism", default=1)
     parser.add_argument("--cp_mode", choices=["ring", "headwise"], help="context parallel attention implementation", default="ring")
     parser.add_argument("--dp", type=int, help="number of data parallelism", default=1)
@@ -111,6 +114,7 @@ if __name__ == "__main__":
     create_single_config(
         out_dir=args.out_dir,
         tp=args.tp,
+        sequence_parallel=args.sequence_parallel,
         cp=args.cp,
         cp_mode=args.cp_mode,
         dp=args.dp,

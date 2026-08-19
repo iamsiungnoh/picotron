@@ -8,6 +8,10 @@ from flash_attn.flash_attn_interface import flash_attn_func
 from flash_attn.layers.rotary import apply_rotary_emb
 from flash_attn.ops.triton.layer_norm import layer_norm_fn
 import picotron.process_group_manager as pgm
+from picotron.tensor_parallel.tp_communications import (
+    CopyToModelParallelRegion,
+    ScatterToSequenceParallelRegion,
+)
 
 def apply_rotary_pos_emb(x, cos, sin):
     #TODO: Maybe do class RotaryEmbedding(nn.Module) later
@@ -42,6 +46,7 @@ class TritonRMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.empty(hidden_size))
+        self.sequence_parallel = False
         self.register_parameter("bias", None)
         self.reset_parameters()
 
@@ -51,9 +56,10 @@ class TritonRMSNorm(nn.Module):
     def forward(
         self, hidden_states, residual=None, dropout_p=0.0, prenorm=False, residual_in_fp32=False, return_dropout_mask=False
     ):
+        weight = CopyToModelParallelRegion.apply(self.weight) if self.sequence_parallel else self.weight
         return layer_norm_fn(
             hidden_states,
-            self.weight,
+            weight,
             None,
             residual=residual,
             eps=self.eps,
@@ -72,6 +78,7 @@ class LlamaRMSNorm(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(hidden_size))
         self.variance_epsilon = eps
+        self.sequence_parallel = False
 
         self.reset_parameters()
     
@@ -83,7 +90,8 @@ class LlamaRMSNorm(nn.Module):
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        weight = CopyToModelParallelRegion.apply(self.weight) if self.sequence_parallel else self.weight
+        return weight * hidden_states.to(input_dtype)
 
 class Attention(nn.Module):
     def __init__(self, config, layer_idx):
@@ -120,10 +128,11 @@ class Attention(nn.Module):
         _init_weights(self.out_proj.weight)
 
     def forward(self, x, cos, sin, attention_mask=None, position_ids=None):
-        batch_size, seq_length, hidden_dim = x.size()
         q = self.q_proj(x) # [batch_size, seq_length, num_heads*head_dim]
         k = self.k_proj(x) # [batch_size, seq_length, num_key_values*head_dim]
         v = self.v_proj(x) # [batch_size, seq_length, num_key_values*head_dim]
+        # Sequence-parallel column projections gather the sequence dimension.
+        batch_size, seq_length, _ = q.size()
         if os.getenv('FLASH_ATTEN', '1') != '1':
             q = q.view(batch_size, seq_length, self.num_local_heads, self.head_dim).transpose(1, 2)       # [batch_size, num_heads, seq_length, head_dim]
             k = k.view(batch_size, seq_length, self.num_local_kv_heads, self.head_dim).transpose(1, 2)  # [batch_size, num_key_values, seq_length, head_dim]
@@ -269,6 +278,7 @@ class Llama(nn.Module):
         self.max_position_embeddings = config.max_position_embeddings
         self.num_layers = config.num_hidden_layers
         self.model_config = config
+        self.sequence_parallel = False
         
         # modules
         self.embedding = Embedding(self.vocab_size, self.hidden_size)
@@ -293,6 +303,8 @@ class Llama(nn.Module):
 
     def forward(self, input_ids, attention_mask=None, position_ids: torch.Tensor = None):
         x = self.embedding(input_ids)
+        if self.sequence_parallel:
+            x = ScatterToSequenceParallelRegion.apply(x)
         for layer in self.decoder_layers:
             x = layer(x)  # [batch_size, seq_length, hidden_dim]
         x = self.final_norm(x)
