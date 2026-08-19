@@ -10,10 +10,28 @@ import huggingface_hub
 import picotron.process_group_manager as pgm
 import torch, torch.distributed as dist
 
+def debug_test(msg):
+    if os.environ.get("DEBUG_TEST", "0") == "1":
+        manager = pgm.process_group_manager
+
+        print(
+            f"[DEBUG TEST]"
+            f"[global={manager.global_rank}]"
+            f"[tp={manager.tp_rank}]"
+            f"[pp={manager.pp_rank}]"
+            f"[dp={manager.dp_rank}]"
+            f"[cp={manager.cp_rank}] "
+            f"{msg}"
+        )
+
 def print(*args, is_print_rank=True, **kwargs):
     """ solves multi-process interleaved print problem """
-    if not is_print_rank: return
-    with open(__file__, "r") as fh:
+    if not is_print_rank:
+        return
+
+    lock_path = f"/tmp/picotron_print_{os.getuid()}.lock"
+
+    with open(lock_path, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             builtins.print(*args, **kwargs)

@@ -10,7 +10,7 @@ import datetime
 import argparse
 import torch.nn.functional as F
 import torch, torch.distributed as dist
-from torch.optim import AdamW
+from torch.optim import AdamW,SGD
 from transformers import AutoConfig
 from picotron.context_parallel.context_parallel import apply_context_parallel
 from picotron.tensor_parallel.tensor_parallel import apply_tensor_parallel
@@ -21,10 +21,11 @@ from picotron.checkpoint import init_model_with_dematerialized_weights, init_mod
 from picotron.data import MicroBatchDataLoader
 from picotron.process_group_manager import setup_process_group_manager
 from picotron.pipeline_parallel.pipeline_parallel import train_step_pipeline_1f1b, train_step_pipeline_afab, PipelineParallel
-from picotron.data_parallel.data_parallel import DataParallelBucket
+from picotron.data_parallel.data_parallel import DataParallelBucket,DataParallelNaive
 from picotron.model import Llama
 from picotron.utils import download_model
 import wandb
+from picotron.utils import debug_test
 
 def train_step(model, data_loader, device):
     acc_loss = 0.0
@@ -47,7 +48,7 @@ def train_step(model, data_loader, device):
         target_ids = target_ids.reshape(-1)
         outputs = outputs.view(seq_len*batch_size, -1)
         loss = F.cross_entropy(outputs, target_ids, reduction='mean') / data_loader.grad_acc_steps
-        
+
         loss.backward()
 
         acc_loss += loss.item()
@@ -81,8 +82,25 @@ if __name__ == "__main__":
     world_size = int(os.environ["WORLD_SIZE"])
 
     backend = "gloo" if config["distributed"]["use_cpu"] else "nccl"
-    
-    assert config["training"]["seq_length"] % config["distributed"]["cp_size"] == 0, "seq_length must be divisible by cp_size for Context Parallelism"
+    if config["distributed"]["cp_seq_padding_en"]:
+        seq_length = config["training"]["seq_length"]
+        cp_size = config["distributed"]["cp_size"]
+        remainder = seq_length % cp_size
+        pad_len = (cp_size - remainder) % cp_size
+        padded_seq_length = seq_length + pad_len
+        config["training"]["seq_length"] = padded_seq_length
+        if pad_len > 0:
+        # Keep the originally requested value around only for logging/debugging
+            config["training"]["seq_length_requested"] = seq_length
+            config["training"]["seq_length"] = seq_length + pad_len
+            print(f"[CP] Rounding seq_length from {seq_length} to "
+            f"{config['training']['seq_length']} to be divisible by cp_size ({cp_size})")
+    else:
+        assert config["training"]["seq_length"] % config["distributed"]["cp_size"] == 0, "seq_length must be divisible by cp_size for Context Parallelism"
+
+      
+
+
     assert world_size == config["distributed"]["tp_size"] * config["distributed"]["pp_size"] * config["distributed"]["dp_size"] * config["distributed"]["cp_size"], "world_size must be equal to tp_size * pp_size * dp_size * cp_size"
 
     if backend == "nccl":
@@ -114,7 +132,8 @@ if __name__ == "__main__":
         num_proc=config["dataset"]["num_proc"],
         num_samples=config["training"].get("num_samples", None),
         subset_name=config["dataset"].get("subset_name", None),
-        split=config["dataset"].get("split", "train")
+        split=config["dataset"].get("split", "train"),
+        cp_zigzag_en=config["model"]["cp_zigzag_en"]
     )
 
     # download model on the first rank, assume all ranks have access to the same filesystem
@@ -157,12 +176,28 @@ if __name__ == "__main__":
         model_config.num_attention_heads = model_config.num_attention_heads if "num_attention_heads" not in config["model"] else config["model"]["num_attention_heads"]
         model_config.num_key_value_heads = model_config.num_key_value_heads if "num_key_value_heads" not in config["model"] else config["model"]["num_key_value_heads"]
         model_config.max_position_embeddings = config["training"]["seq_length"]
+        # add custom config attribute
+        model_config.vocab_padding_en = config["model"].get(
+            "vocab_padding_en",
+            False,
+        )
+        model_config.fuse_qkv_en  = config["model"].get(
+            "fuse_qkv_en",
+            False,
+        ) 
+        model_config.cp_zigzag_en  = config["model"].get(
+                    "cp_zigzag_en",
+                    False,
+                ) 
+        if model_config.vocab_padding_en:
+            model_config.vocab_size += 1
         objects = [model_config]
     else:
         objects = [None]
 
     dist.broadcast_object_list(objects, src=0, device=device)
     model_config = objects[0]
+    print(model_config)
     print(f"rank {pgm.process_group_manager.global_rank}: Broadcasting model_config to all ranks", is_print_rank=pgm.process_group_manager.global_rank==0)
 
     dist.barrier()
@@ -253,6 +288,7 @@ if __name__ == "__main__":
                 f"Tokens/s: {to_readable_format(tokens_per_second):>7s} | "
                 f"Tokens/s/GPU: {to_readable_format(tokens_per_second_per_gpu):>7s} | "
                 f"Tokens: {to_readable_format(trained_tokens):>7s}{('/' + to_readable_format(config['training']['max_tokens'])) if config['training']['max_tokens'] else ''} | "
+                f"Step time: {step_duration:6.2f}s | "
                 f"MFU: {mfu:5.2f}% | "
                 f"Memory usage: {torch.cuda.memory_reserved() / 1e9:6.2f}GB",
                 is_print_rank=is_wandb_rank

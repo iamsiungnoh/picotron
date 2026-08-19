@@ -30,7 +30,11 @@ def create_single_config(
     use_wandb: bool = False,
     use_cpu: bool = False,
     use_fused_adam: bool = False,
-    hf_token: str = None
+    hf_token: str = None,
+    vocab_padding_en = False,
+    cp_seq_padding_en = False,
+    fuse_qkv_en=False,
+    cp_zigzag_en=False
 ):
     run_path = os.path.join(out_dir, exp_name)
 
@@ -53,6 +57,9 @@ def create_single_config(
     config_content["model"]["num_attention_heads"] = tmp_model_config.num_attention_heads if num_attention_heads is None else num_attention_heads
     config_content["model"]["num_key_value_heads"] = tmp_model_config.num_key_value_heads if num_key_value_heads is None else num_key_value_heads
     config_content["model"]["use_fused_adam"] = use_fused_adam
+    config_content["model"]["vocab_padding_en"] = vocab_padding_en
+    config_content["model"]["fuse_qkv_en"] = fuse_qkv_en
+    config_content["model"]["cp_zigzag_en"] = cp_zigzag_en
     del tmp_model_config
 
     config_content['distributed']['tp_size'] = tp
@@ -61,6 +68,7 @@ def create_single_config(
     config_content['distributed']['pp_size'] = pp
     config_content['distributed']['pp_engine'] = pp_engine
     config_content['distributed']['use_cpu'] = use_cpu
+    config_content["distributed"]["cp_seq_padding_en"] = cp_seq_padding_en
     if use_cpu:
         config_content["environment"]["FLASH_ATTEN"] = "0"
         config_content["distributed"]["backend"] = "gloo"
@@ -104,7 +112,28 @@ if __name__ == "__main__":
     parser.add_argument("--use_cpu", action="store_true", help="Use CPU for training")
     parser.add_argument("--use_fused_adam", action="store_true", help="Use fused adam")
     parser.add_argument("--hf_token", type=str, help="HF token")
+    parser.add_argument(
+    "--vocab_padding_en",
+    action="store_true",
+        help="Enable vocabulary padding for tensor-parallel embedding and output projection.",
+    )
 
+    parser.add_argument(
+        "--cp_seq_padding_en",
+        action="store_true",
+        help="Enable sequence padding for context parallelism.",
+    )
+
+    parser.add_argument(
+        "--fuse_qkv_en",
+        action="store_true",
+        help="Enable fused QKV projection.",
+    )
+    parser.add_argument(
+        "--cp_zigzag_en",
+        action="store_true",
+        help="Enable zigzag sequence partitioning for context parallelism.",
+    )
     args=parser.parse_args()
     
     create_single_config(
@@ -126,7 +155,11 @@ if __name__ == "__main__":
         use_wandb=args.use_wandb,
         use_cpu=args.use_cpu,
         use_fused_adam=args.use_fused_adam,
-        hf_token=args.hf_token
+        hf_token=args.hf_token,
+        vocab_padding_en=args.vocab_padding_en,
+        cp_seq_padding_en=args.cp_seq_padding_en,
+        fuse_qkv_en=args.fuse_qkv_en,
+        cp_zigzag_en=args.cp_zigzag_en
     )    
 
     print("Configs created successfully! ✅")

@@ -14,7 +14,16 @@ def split_tensor_along_last_dim(tensor, num_partitions):
     last_dim = tensor.dim() - 1
     assert tensor.size()[last_dim] % num_partitions == 0, f"{tensor.size()[last_dim]} is not divisible by {num_partitions}"
     last_dim_size = tensor.size()[last_dim] // num_partitions
+    ###############################################################################
+    # TODO: Split `tensor` into `num_partitions` equal chunks of size            #
+    # `last_dim_size` along `last_dim`, and return the result.                   #
+    ###############################################################################
+    # raise NotImplementedError
     return torch.split(tensor, last_dim_size, dim=last_dim)
+    ################################################################################
+    #                                 END OF YOUR CODE                             #
+    ################################################################################
+ 
 
 class CopyToModelParallelRegion(torch.autograd.Function):
     """
@@ -23,13 +32,27 @@ class CopyToModelParallelRegion(torch.autograd.Function):
     """
     @staticmethod
     def forward(ctx, x):
+        ###############################################################################
+        # TODO: Implement the forward pass                                            #
+        ###############################################################################
         return x
-
+        # raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
     @staticmethod
     def backward(ctx, grad_output):
         if pgm.process_group_manager.tp_world_size == 1:
           return grad_output
+        ###############################################################################
+        # TODO: Implement the all_reduce                                              #
+        # Hint: dist.all_reduce https://docs.pytorch.org/docs/2.13/distributed.html#torch.distributed.all_reduce
+        ###############################################################################
         dist.all_reduce(grad_output, op=dist.ReduceOp.SUM, group=pgm.process_group_manager.tp_group)
+        # raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
         return grad_output
 
 class ReduceFromModelParallelRegion(torch.autograd.Function):
@@ -41,7 +64,15 @@ class ReduceFromModelParallelRegion(torch.autograd.Function):
     def forward(ctx, x):
         if pgm.process_group_manager.tp_world_size == 1:
             return x
+        ###############################################################################
+        # TODO: All-reduce `x` (sum) across the tensor-parallel group                 #
+        # Hint: dist.all_reduce https://docs.pytorch.org/docs/2.13/distributed.html#torch.distributed.all_reduce
+        ###############################################################################
         dist.all_reduce(x, op=dist.ReduceOp.SUM, group=pgm.process_group_manager.tp_group)
+        # raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
         return x
 
     @staticmethod
@@ -57,10 +88,32 @@ class GatherFromModelParallelRegion(torch.autograd.Function):
         last_dim = x.dim() - 1
         # Need contiguous tensors for collectives -> https://github.com/pytorch/pytorch/blob/main/torch/distributed/nn/functional.py#L321
         x = x.contiguous()
+        # Step 1: allocate one empty buffer per TP rank, and place our own
+        # shard into the slot matching our own rank (saves one copy — every
+        # other rank's slot will be filled in by the collective below).
         tensor_list = [torch.empty_like(x) for _ in range(pgm.process_group_manager.tp_world_size)]
         tensor_list[pgm.process_group_manager.tp_rank] = x
+        ###############################################################################
+        # TODO:  Step 2: Gather `x` from every rank in the tensor-parallel group      #
+        # Hint: https://docs.pytorch.org/docs/2.13/distributed.html#torch.distributed.all_gather
+        ###############################################################################
         dist.all_gather(tensor_list, x, group=pgm.process_group_manager.tp_group)
+        # raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ###############################################################################
+       
+        ###############################################################################
+        # TODO: Step 3 — concatenate the per-rank shards in `tensor_list` back into   #
+        # the full-size tensor, along the dimension that was originally sharded       #
+        # (`last_dim`). Don't forget to make the result contiguous.                   #
+        # Hint: https://docs.pytorch.org/docs/2.13/generated/torch.cat.html           #
+        ###############################################################################
         output = torch.cat(tensor_list, dim=last_dim).contiguous()
+        # raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
         return output
 
     @staticmethod

@@ -13,6 +13,7 @@ import picotron.process_group_manager as pgm
 
 from picotron.pipeline_parallel.pipeline_parallel import PipelineParallel
 
+
 @contextlib.contextmanager
 def init_model_with_dematerialized_weights(include_buffers: bool = False):
     """
@@ -85,16 +86,27 @@ def init_model_with_materialized_weights(model, model_config, save_dir):
                 tensor = f.get_tensor(sft_name)
                 tensor = initialization_manager.adjust_tensor_size(tensor, hf_name)
                 state_dict[hf_name] = tensor
-
+    if model_config.fuse_qkv_en:
+        state_dict = _fuse_qkv_state_dict(state_dict, model_config)
     # Force creation of lm_head (even if it is tie_embedding)
     if pgm.process_group_manager.pp_is_last_stage or not isinstance(model, PipelineParallel):
         vocab_size = model_config.vocab_size
-        if pgm.process_group_manager.tp_world_size > 1:
-            # For TP>1, the final_proj is already wrapped in ColumnParallel
-            # Just need to initialize state_dict with correct sharded size
-            vocab_per_rank = vocab_size // pgm.process_group_manager.tp_world_size
-            # Note: For ColumnParallelLinear, weight shape should be (output_size_per_partition, in_features)
-            state_dict['final_proj.weight'] = torch.zeros(vocab_per_rank, model_config.hidden_size)
+        tp_size = pgm.process_group_manager.tp_world_size
+        if tp_size > 1:
+            if model_config.vocab_padding_en:
+                padded_vocab_size = (
+                    (vocab_size + tp_size - 1)
+                    // tp_size
+                    * tp_size
+                )
+                vocab_per_rank = padded_vocab_size // tp_size
+            else:
+                vocab_per_rank = vocab_size // tp_size
+
+            state_dict["final_proj.weight"] = torch.zeros(
+                vocab_per_rank,
+                model_config.hidden_size,
+            )
         else:
             # For TP=1, create the full layer. FinalProjection expects weight shape (out_features, in_features)
             # FinalProjection is needed so that we cann call .reset_parameters() on it
@@ -167,11 +179,37 @@ class InitializationManager:
         # Handle embedding and final projection layers
         if 'embedding.weight' in name or 'final_proj.weight' in name:
             vocab_size = self.model_config.vocab_size
-            vocab_per_rank = vocab_size // tp_size
+
+            if self.model_config.vocab_padding_en:
+                padded_vocab_size = (
+                    (vocab_size + tp_size - 1)
+                    // tp_size
+                    * tp_size
+                )
+                vocab_per_rank = padded_vocab_size // tp_size
+            else:
+                vocab_per_rank = vocab_size // tp_size
+
+            start_idx = tp_rank * vocab_per_rank
+            end_idx = start_idx + vocab_per_rank
+
             if tensor.shape[0] != vocab_per_rank:
-                start_idx = tp_rank * vocab_per_rank
-                end_idx = start_idx + vocab_per_rank
                 tensor = tensor[start_idx:end_idx, :]
+
+            if tensor.shape[0] < vocab_per_rank:
+                pad_rows = vocab_per_rank - tensor.shape[0]
+
+                pad_tensor = torch.zeros(
+                    pad_rows,
+                    tensor.shape[1],
+                    dtype=tensor.dtype,
+                    device=tensor.device,
+                )
+
+                tensor = torch.cat(
+                    [tensor, pad_tensor],
+                    dim=0,
+                )
             return tensor
 
         # Handle attention layers
@@ -201,6 +239,9 @@ class InitializationManager:
                                         dtype=tensor.dtype, device=tensor.device)
                     tensor = torch.cat([tensor, pad_tensor], dim=0)
                 else:
+                    start_idx = tp_rank * target_dim
+                    end_idx = start_idx + target_dim
+                    tensor = tensor[start_idx:end_idx, :]
                     tensor = tensor[:target_dim, :]
 
         # Handle MLP layers
@@ -287,3 +328,22 @@ class CheckpointManager:
         optimizer.load_state_dict(checkpoint['optimizer'])
         
         return checkpoint['trained_steps'], checkpoint['trained_tokens']
+
+
+def _fuse_qkv_state_dict(state_dict, model_config):
+    layer_indices = set()
+    for key in state_dict.keys():
+        m = re.match(r"decoder_layers\.(\d+)\.attention\.q_proj\.weight", key)
+        if m:
+            layer_indices.add(int(m.group(1)))
+
+    for idx in layer_indices:
+        prefix = f"decoder_layers.{idx}.attention"
+        q_key, k_key, v_key = f"{prefix}.q_proj.weight", f"{prefix}.k_proj.weight", f"{prefix}.v_proj.weight"
+        # NEW: pop (not just read) so the separate keys don't remain as "unexpected keys"
+        q_w = state_dict.pop(q_key)
+        k_w = state_dict.pop(k_key)
+        v_w = state_dict.pop(v_key)
+        state_dict[f"{prefix}.qkv_proj.weight"] = torch.cat([q_w, k_w, v_w], dim=0)
+
+    return state_dict
