@@ -8,6 +8,16 @@ STEP, VERBOSE = 0, os.environ.get("VERBOSE", "0") == "1"
 def pipeline_communicate(operation, device, dtype, tensor=None, shapes=None):
     global STEP
     global VERBOSE
+
+    ####################################################################################
+    ###            TODO: Implement communication logic for each operation            ###
+    ###            1. set src/dst rank for each case                                 ###
+    ###            2. create empty tensor if receiving data from other ranks         ###
+    ###            (keep requires_grad=True for the empty tensors)                   ###
+    ###            hint: first/last stage handling is needed                         ###
+    ####################################################################################
+    
+
     if operation == 'recv_forward':
         if pgm.process_group_manager.pp_is_first_stage: return None
         tensor = torch.empty(shapes, requires_grad=True, device=device, dtype=dtype)
@@ -22,6 +32,11 @@ def pipeline_communicate(operation, device, dtype, tensor=None, shapes=None):
     elif operation == 'send_backward':
         if pgm.process_group_manager.pp_is_first_stage: return
         dest = pgm.process_group_manager.pp_prev_rank
+
+    ####################################################################################
+    ###                            END of Implementation.                            ###
+    ####################################################################################
+
     is_send = operation.startswith('send')
     peer_rank = dest if is_send else src
     op = dist.P2POp(dist.isend if is_send else dist.irecv, tensor, peer_rank)

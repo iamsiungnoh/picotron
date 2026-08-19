@@ -25,6 +25,102 @@ def split_tensor_along_last_dim(tensor, num_partitions):
     ################################################################################
  
 
+def gather_along_sequence_dim(x: torch.Tensor) -> torch.Tensor:
+    """Gather equal sequence shards from the TP group along dimension 1."""
+    tp_world_size = pgm.process_group_manager.tp_world_size
+    if tp_world_size == 1:
+        return x
+    if x.dim() < 2:
+        raise ValueError(f"Sequence-parallel tensors must have at least 2 dimensions, got shape {tuple(x.shape)}")
+
+    # The *_into_tensor collectives concatenate/split along dimension 0, so
+    # temporarily move the sequence dimension there.
+    x_sequence_first = x.movedim(1, 0).contiguous()
+    gathered_sequence_first = torch.empty(
+        (x_sequence_first.size(0) * tp_world_size, *x_sequence_first.shape[1:]),
+        dtype=x.dtype,
+        device=x.device,
+    )
+    dist.all_gather_into_tensor(
+        gathered_sequence_first,
+        x_sequence_first,
+        group=pgm.process_group_manager.tp_group,
+    )
+    return gathered_sequence_first.movedim(0, 1).contiguous()
+
+def scatter_along_sequence_dim(x: torch.Tensor) -> torch.Tensor:
+    """Return this TP rank's chunk of the sequence dimension."""
+    tp_world_size = pgm.process_group_manager.tp_world_size
+    if tp_world_size == 1:
+        return x
+    if x.dim() < 2:
+        raise ValueError(f"Sequence-parallel tensors must have at least 2 dimensions, got shape {tuple(x.shape)}")
+    if x.size(1) % tp_world_size != 0:
+        raise ValueError(
+            f"Sequence length ({x.size(1)}) must be divisible by TP size ({tp_world_size})"
+        )
+
+    return x.chunk(tp_world_size, dim=1)[pgm.process_group_manager.tp_rank].contiguous()
+
+def reduce_scatter_along_sequence_dim(x: torch.Tensor) -> torch.Tensor:
+    """Sum across the TP group and scatter the result along dimension 1."""
+    tp_world_size = pgm.process_group_manager.tp_world_size
+    if tp_world_size == 1:
+        return x
+    if x.dim() < 2:
+        raise ValueError(f"Sequence-parallel tensors must have at least 2 dimensions, got shape {tuple(x.shape)}")
+    if x.size(1) % tp_world_size != 0:
+        raise ValueError(
+            f"Sequence length ({x.size(1)}) must be divisible by TP size ({tp_world_size})"
+        )
+
+    x_sequence_first = x.movedim(1, 0).contiguous()
+    local_sequence_length = x_sequence_first.size(0) // tp_world_size
+    output_sequence_first = torch.empty(
+        (local_sequence_length, *x_sequence_first.shape[1:]),
+        dtype=x.dtype,
+        device=x.device,
+    )
+    dist.reduce_scatter_tensor(
+        output_sequence_first,
+        x_sequence_first,
+        group=pgm.process_group_manager.tp_group,
+    )
+    return output_sequence_first.movedim(0, 1).contiguous()
+
+class GatherFromSequenceParallelRegion(torch.autograd.Function):
+    """Gather sequence shards in forward and reduce-scatter in backward."""
+
+    @staticmethod
+    def forward(ctx, x):
+        return gather_along_sequence_dim(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return reduce_scatter_along_sequence_dim(grad_output)
+
+class ScatterToSequenceParallelRegion(torch.autograd.Function):
+    """Scatter the sequence in forward and all-gather in backward."""
+
+    @staticmethod
+    def forward(ctx, x):
+        return scatter_along_sequence_dim(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return gather_along_sequence_dim(grad_output)
+
+class ReduceScatterToSequenceParallelRegion(torch.autograd.Function):
+    """Reduce-scatter the sequence in forward and all-gather in backward."""
+
+    @staticmethod
+    def forward(ctx, x):
+        return reduce_scatter_along_sequence_dim(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return gather_along_sequence_dim(grad_output)
+
 class CopyToModelParallelRegion(torch.autograd.Function):
     """
     Copy in forward pass, all-reduce in backward pass.

@@ -1,38 +1,30 @@
+import contextlib
 import os
-import re
-import json
+
 import torch
 import torch.nn as nn
-import torch.distributed as dist
-from safetensors import safe_open
-import contextlib
 
-from picotron.model import FinalProjection
-from picotron.utils import assert_no_meta_tensors, print
 import picotron.process_group_manager as pgm
+from picotron.utils import assert_no_meta_tensors
 
-from picotron.pipeline_parallel.pipeline_parallel import PipelineParallel
 
 
 @contextlib.contextmanager
 def init_model_with_dematerialized_weights(include_buffers: bool = False):
-    """
-    From Accelerate library: https://github.com/huggingface/accelerate/blob/v0.11.0/src/accelerate/big_modeling.py#L254
-    Context manager that initializes models with empty weights (no memory allocation).
-    
-    Args:
-        include_buffers (bool): Whether to also skip buffer initialization.
-    """
+    """Construct a model with parameters on the meta device."""
     old_register_parameter = nn.Module.register_parameter
     if include_buffers:
         old_register_buffer = nn.Module.register_buffer
 
-    def register_empty_parameter(module, name, param):
-        old_register_parameter(module, name, param)
-        if param is not None:
-            param_cls = type(module._parameters[name])
-            kwargs = module._parameters[name].__dict__
-            module._parameters[name] = param_cls(module._parameters[name].to(torch.device("meta")), **kwargs)
+    def register_empty_parameter(module, name, parameter):
+        old_register_parameter(module, name, parameter)
+        if parameter is not None:
+            parameter_class = type(module._parameters[name])
+            parameter_attributes = module._parameters[name].__dict__
+            module._parameters[name] = parameter_class(
+                module._parameters[name].to(torch.device("meta")),
+                **parameter_attributes,
+            )
 
     def register_empty_buffer(module, name, buffer):
         old_register_buffer(module, name, buffer)
@@ -49,79 +41,23 @@ def init_model_with_dematerialized_weights(include_buffers: bool = False):
         if include_buffers:
             nn.Module.register_buffer = old_register_buffer
 
-def init_model_with_materialized_weights(model, model_config, save_dir):
-    #Initialize model with correct tensor shapes but random weights
-    initialization_manager = InitializationManager(model, model_config)
-    layer_names = initialization_manager.get_layer_names_in_sft_format()
 
-    # print(f"Rank {pgm.process_group_manager.global_rank} responsible for {len(layer_names)} layers")
-    
-    if len(layer_names) == 0:
-        raise Exception("Some ranks has no layers. There are too many ranks and not enough layers to distribute.")
+def init_model_with_materialized_weights(model, device="cpu"):
+    """Allocate meta parameters directly and initialize them from scratch."""
+    for module in model.modules():
+        for name, parameter in module._parameters.items():
+            if parameter is None or not parameter.is_meta:
+                continue
 
-    state_dict = {}
-
-    index_path = os.path.join(save_dir, "model.safetensors.index.json")
-
-    if os.path.exists(index_path): # Handle sharded checkpoint
-        with open(index_path, 'r') as f:
-            index = json.load(f)
-        
-        for sft_name in layer_names:
-            shard_path = os.path.join(save_dir, index['weight_map'][sft_name])
-            with safe_open(shard_path, framework="pytorch", device="cpu") as f:
-                hf_name = initialization_manager.convert_safetensors_to_hf_name(sft_name)
-                tensor = f.get_tensor(sft_name)
-                tensor = initialization_manager.adjust_tensor_size(tensor, hf_name)
-                state_dict[hf_name] = tensor
-
-    else: # Handle single file checkpoint
-        safetensors_path = os.path.join(save_dir, "model.safetensors")
-        with safe_open(safetensors_path, framework="pytorch", device="cpu") as f:
-            if len(f.keys()) > len(layer_names):
-                print(f"rank {pgm.process_group_manager.global_rank}: Warning: Checkpoint has {len(f.keys())} layers but model only has {len(layer_names)} layers.")
-            
-            for sft_name in layer_names:
-                hf_name = initialization_manager.convert_safetensors_to_hf_name(sft_name)
-                tensor = f.get_tensor(sft_name)
-                tensor = initialization_manager.adjust_tensor_size(tensor, hf_name)
-                state_dict[hf_name] = tensor
-    if model_config.fuse_qkv_en:
-        state_dict = _fuse_qkv_state_dict(state_dict, model_config)
-    # Force creation of lm_head (even if it is tie_embedding)
-    if pgm.process_group_manager.pp_is_last_stage or not isinstance(model, PipelineParallel):
-        vocab_size = model_config.vocab_size
-        tp_size = pgm.process_group_manager.tp_world_size
-        if tp_size > 1:
-            if model_config.vocab_padding_en:
-                padded_vocab_size = (
-                    (vocab_size + tp_size - 1)
-                    // tp_size
-                    * tp_size
-                )
-                vocab_per_rank = padded_vocab_size // tp_size
-            else:
-                vocab_per_rank = vocab_size // tp_size
-
-            state_dict["final_proj.weight"] = torch.zeros(
-                vocab_per_rank,
-                model_config.hidden_size,
+            materialized_parameter = nn.Parameter(
+                torch.empty_like(parameter, device=device),
+                requires_grad=parameter.requires_grad,
             )
-        else:
-            # For TP=1, create the full layer. FinalProjection expects weight shape (out_features, in_features)
-            # FinalProjection is needed so that we cann call .reset_parameters() on it
-            model.final_proj = FinalProjection(model_config.hidden_size, vocab_size, bias=False)
-            state_dict['final_proj.weight'] = torch.zeros(vocab_size, model_config.hidden_size)
+            materialized_parameter.__dict__.update(parameter.__dict__)
+            module._parameters[name] = materialized_parameter
 
-    # Synchronize across distributed processes and load weights
-    dist.barrier()
-    model.load_state_dict(state_dict, strict=True, assign=True)
-    dist.barrier()
-
+    model.reset_parameters()
     assert_no_meta_tensors(model)
-    # Initialize model parameters
-    initialization_manager.init_model_parameters()
-    dist.barrier()
     return model
 
 class InitializationManager:
@@ -292,35 +228,35 @@ class CheckpointManager:
         self.cp_rank = pgm.process_group_manager.cp_rank
 
     def _get_checkpoint_path(self, out_dir):
-        ckpt_name = f"weights_tp_rank_world_size={self.tp_rank}_{self.tp_world_size}_pp_rank_world_size={self.pp_rank}_{self.pp_world_size}.pth"
-        return os.path.join(out_dir, ckpt_name)
+        checkpoint_name = (
+            f"weights_tp_rank_world_size={self.tp_rank}_{self.tp_world_size}_"
+            f"pp_rank_world_size={self.pp_rank}_{self.pp_world_size}.pth"
+        )
+        return os.path.join(out_dir, checkpoint_name)
 
     def save_checkpoint(self, model, optimizer, trained_steps, trained_tokens, out_dir):
-        """Save the model/optimizer states/steps to a checkpoint file."""
+        """Save model, optimizer, and training progress."""
         path = self._get_checkpoint_path(out_dir)
-        
-        # Only DP/CP rank 0 will save the model, the weights are the same across all ranks
+
+        # CP/DP replicas have identical weights, so only replica zero saves.
         if self.dp_rank == 0 and self.cp_rank == 0:
             os.makedirs(out_dir, exist_ok=True)
             raw_model = model.module if self.cp_dp_world_size > 1 else model
             checkpoint = {
-                'model': raw_model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'trained_steps': trained_steps,
-                'trained_tokens': trained_tokens
+                "model": raw_model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "trained_steps": trained_steps,
+                "trained_tokens": trained_tokens,
             }
             torch.save(checkpoint, path)
 
     def load_checkpoint(self, model, optimizer, out_dir):
-        """Load the model/optimizer states from the latest checkpoint. Assume the topology is the same."""
+        """Load a checkpoint created with the same parallel topology."""
         path = self._get_checkpoint_path(out_dir)
-        
         if not os.path.exists(path):
             raise FileNotFoundError(f"Checkpoint not found at {path}")
-            
-        checkpoint = torch.load(path)
 
-        # Load model weights
+        checkpoint = torch.load(path)
         raw_model = model.module if self.cp_dp_world_size > 1 else model
         raw_model.load_state_dict(checkpoint['model'])
         

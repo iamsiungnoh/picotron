@@ -44,10 +44,20 @@ class PipelineParallel(nn.Module):
         Distribute model layers across GPUs as evenly as possible.
         Returns the layer indices that should be processed by this GPU.
         """
+
+        ####################################################################################
+        ###                TODO: Implement layers_per_gpu and start_layer                ###
+        ####################################################################################
+
         # Calculate layers per GPU, handling uneven distribution
         layers_per_gpu = [num_layers // pgm.process_group_manager.pp_world_size + (1 if i < num_layers % pgm.process_group_manager.pp_world_size else 0) for i in range(pgm.process_group_manager.pp_world_size)]
         # Calculate starting layer for this GPU
         start_layer = sum(layers_per_gpu[:pgm.process_group_manager.pp_rank])
+
+        ####################################################################################
+        ###                            END of Implementation.                            ###
+        ####################################################################################
+        
         return list(range(start_layer, start_layer + layers_per_gpu[pgm.process_group_manager.pp_rank]))
 
     def forward(self, input_ids, position_ids, hidden_states):
