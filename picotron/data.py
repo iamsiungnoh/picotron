@@ -6,11 +6,13 @@ from functools import partial
 from datasets import Features, Sequence, Value, load_dataset
 from transformers import AutoTokenizer
 from picotron.utils import print
-
+import os
 import picotron.process_group_manager as pgm
+from picotron.context_parallel.context_parallel import get_zigzag_indices
 
 class MicroBatchDataLoader(DataLoader):
-    def __init__(self,  micro_batch_size, seq_length, dataset_name, tokenizer_name, num_workers, num_proc, grad_acc_steps, device, subset_name=None, split="train", num_samples=None, pin_memory=True):
+    def __init__(self,  micro_batch_size, seq_length, dataset_name, tokenizer_name, num_workers, num_proc, grad_acc_steps, device, 
+                 subset_name=None, split="train", num_samples=None, pin_memory=True,cp_zigzag_en=False):
         self.micro_batch_size = micro_batch_size
         self.seq_length = seq_length
         self.grad_acc_steps = grad_acc_steps
@@ -43,7 +45,7 @@ class MicroBatchDataLoader(DataLoader):
             rank=pgm.process_group_manager.dp_rank, 
             shuffle=False
         )
-        
+        self.cp_zigzag_en=cp_zigzag_en
         super().__init__(
             self.tokenized_dataset,
             batch_size=micro_batch_size,
@@ -107,7 +109,22 @@ class MicroBatchDataLoader(DataLoader):
         input_ids = batch_input_ids[:, start_idx:end_idx].contiguous()
         target_ids = batch_input_ids[:, start_idx+1:end_idx+1].contiguous()
         position_ids = torch.arange(start_idx, end_idx, dtype=torch.long).unsqueeze(0).expand(batch_size, -1).contiguous() 
-        
+        if self.cp_zigzag_en:
+            indices = get_zigzag_indices(
+                self.seq_length,
+                pgm.process_group_manager.cp_rank,
+                pgm.process_group_manager.cp_world_size,
+            )
+            input_ids = batch_input_ids[:, indices].contiguous()
+            target_ids = batch_input_ids[:, indices + 1].contiguous()
+            position_ids = (
+                indices
+                .unsqueeze(0)
+                .expand(batch_size, -1)
+                .contiguous()
+            )
+
+
         return {
             "input_ids": input_ids,
             "target_ids": target_ids,

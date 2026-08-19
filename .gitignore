@@ -8,3 +8,6 @@ tmp
 debug
 bench
 sandbox
+hf_model_safetensors/
+hf_model/
+*.json
