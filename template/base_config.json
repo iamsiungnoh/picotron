@@ -1,6 +1,7 @@
 {
     "distributed": {
         "tp_size": 1,
+        "sequence_parallel": false,
         "cp_size": 1,
         "cp_mode": "ring",
         "pp_size": 1,

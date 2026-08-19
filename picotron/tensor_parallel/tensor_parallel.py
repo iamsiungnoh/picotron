@@ -4,9 +4,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import picotron.process_group_manager as pgm
-from picotron.tensor_parallel.tp_communications import ReduceFromModelParallelRegion, GatherFromModelParallelRegion, linear_with_all_reduce, linear_with_async_all_reduce
+from picotron.tensor_parallel.tp_communications import (
+    CopyToModelParallelRegion,
+    GatherFromModelParallelRegion,
+    GatherFromSequenceParallelRegion,
+    ReduceFromModelParallelRegion,
+    ReduceScatterToSequenceParallelRegion,
+    linear_with_all_reduce,
+    linear_with_async_all_reduce,
+)
 
-def apply_tensor_parallel(model):
+def apply_tensor_parallel(model, sequence_parallel=False):
+
+    model.sequence_parallel = sequence_parallel
 
     def _replace_module(_module, _linear_proj_name, _style, args={}):
         assert _style in ["column", "row", 'vocab']
@@ -17,13 +27,15 @@ def apply_tensor_parallel(model):
                 in_features=linear_layer.in_features,
                 out_features=linear_layer.out_features,
                 bias=linear_layer.bias is not None,
-                gather_output=args.get("gather_output", False)
+                gather_output=args.get("gather_output", False),
+                sequence_parallel=sequence_parallel,
             )
         elif _style == "row":
             new_linear_layer = RowParallelLinear(
                 in_features=linear_layer.in_features,
                 out_features=linear_layer.out_features,
                 bias=linear_layer.bias is not None,
+                sequence_parallel=sequence_parallel,
             )
         else:
             new_linear_layer = VocabParallelEmbedding(
@@ -43,10 +55,13 @@ def apply_tensor_parallel(model):
     ]
 
     for layer in model.decoder_layers:
+        layer.input_layernorm.sequence_parallel = sequence_parallel
+        layer.post_attention_layernorm.sequence_parallel = sequence_parallel
         for module_name, linear_proj_name, style in module_linear_name_stype_mapping_list:
             _replace_module(getattr(layer, module_name), linear_proj_name, style)
             
     _replace_module(model, "embedding", "vocab")
+    model.final_norm.sequence_parallel = sequence_parallel
     _replace_module(model, "final_proj", "column", args={"gather_output": True})
     
     return model
@@ -70,6 +85,7 @@ class ColumnParallelLinear(torch.nn.Module):
         bias: bool = False,
         gather_output: bool = False,
         async_all_reduce: bool = False,
+        sequence_parallel: bool = False,
     ) -> None:
         super(ColumnParallelLinear, self).__init__()
 
@@ -82,6 +98,9 @@ class ColumnParallelLinear(torch.nn.Module):
         self.output_size_per_partition = out_features // self.tp_world_size
         self.gather_output = gather_output
         self.async_all_reduce = async_all_reduce
+        self.sequence_parallel = sequence_parallel
+        if self.sequence_parallel and self.async_all_reduce:
+            raise ValueError("Sequence parallelism cannot be combined with async input-gradient all-reduce")
         # Allocate space for the weight and bias
         # Note: torch.nn.functional.linear performs XW^T + b so we exchange the order of dimensions
         self.weight = nn.Parameter(torch.Tensor(self.output_size_per_partition, self.in_features)) # W_i
@@ -114,7 +133,10 @@ class ColumnParallelLinear(torch.nn.Module):
         self.weight.data = weight_list[self.tp_rank].contiguous()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:  
-        if self.async_all_reduce:
+        if self.sequence_parallel:
+            input_parallel = GatherFromSequenceParallelRegion.apply(x)
+            output = F.linear(input_parallel, self.weight, self.bias)
+        elif self.async_all_reduce:
             output = linear_with_async_all_reduce(x, self.weight, self.bias) 
         else:
             output = linear_with_all_reduce(x, self.weight, self.bias) 
@@ -140,7 +162,7 @@ class RowParallelLinear(nn.Module):
         bias: If true, add bias
         init_method: method to initialize weights.
     """
-    def __init__(self, in_features: int, out_features: int, bias: bool):
+    def __init__(self, in_features: int, out_features: int, bias: bool, sequence_parallel: bool = False):
         super(RowParallelLinear, self).__init__()
 
         self.tp_world_size = pgm.process_group_manager.tp_world_size
@@ -148,6 +170,7 @@ class RowParallelLinear(nn.Module):
 
         self.in_features = in_features
         self.out_features = out_features
+        self.sequence_parallel = sequence_parallel
         assert in_features % self.tp_world_size == 0, "Hidden dimension must be divisible by the tensor parallel world size"
         self.input_size_per_partition = in_features // self.tp_world_size
 
@@ -184,9 +207,16 @@ class RowParallelLinear(nn.Module):
     def forward(self, x):
         # X_i * W_i^T + b
         output_parallel = F.linear(x, self.weight)
-        # All-reduce across all the partitions.
-        output = ReduceFromModelParallelRegion.apply(output_parallel)
-        return output if self.bias is None else output + self.bias
+        if self.sequence_parallel:
+            output = ReduceScatterToSequenceParallelRegion.apply(output_parallel)
+            # The bias is replicated across TP ranks, while each rank sees only
+            # a sequence shard. Sum its gradient across TP in backward.
+            bias = None if self.bias is None else CopyToModelParallelRegion.apply(self.bias)
+        else:
+            # All-reduce across all the partitions.
+            output = ReduceFromModelParallelRegion.apply(output_parallel)
+            bias = self.bias
+        return output if bias is None else output + bias
 
 class VocabParallelEmbedding(nn.Module):
     def __init__(

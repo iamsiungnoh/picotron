@@ -64,6 +64,16 @@ if __name__ == "__main__":
     log_frequency = config["logging"].get("log_frequency", 10)
     if log_frequency < 1:
         raise ValueError(f"log_frequency must be positive, got {log_frequency}")
+
+    sequence_parallel = config["distributed"].get("sequence_parallel", False)
+    tp_size = config["distributed"]["tp_size"]
+    cp_size = config["distributed"]["cp_size"]
+    if sequence_parallel and tp_size == 1:
+        raise ValueError("Sequence parallelism requires tp_size greater than 1")
+    if sequence_parallel and config["training"]["seq_length"] % (cp_size * tp_size) != 0:
+        raise ValueError(
+            "seq_length must be divisible by cp_size * tp_size when sequence parallelism is enabled"
+        )
     
     os.environ["OMP_NUM_THREADS"] = config["environment"]["OMP_NUM_THREADS"]
     os.environ["TOKENIZERS_PARALLELISM"] = config["environment"]["TOKENIZERS_PARALLELISM"]
@@ -166,7 +176,7 @@ if __name__ == "__main__":
         model = Llama(config=model_config)
 
         if pgm.process_group_manager.tp_world_size > 1:
-            model = apply_tensor_parallel(model)
+            model = apply_tensor_parallel(model, sequence_parallel=sequence_parallel)
 
         if pgm.process_group_manager.pp_world_size > 1:
             model = PipelineParallel(model, model_config)
@@ -190,7 +200,10 @@ if __name__ == "__main__":
     num_params = get_num_params(model)
     print(f"Number of parameters: {to_readable_format(num_params)}", is_print_rank=is_wandb_rank)
     
-    tensor_shapes = (data_loader.micro_batch_size, data_loader.seq_length_per_gpu, model_config.hidden_size)
+    pipeline_sequence_length = data_loader.seq_length_per_gpu
+    if sequence_parallel:
+        pipeline_sequence_length //= pgm.process_group_manager.tp_world_size
+    tensor_shapes = (data_loader.micro_batch_size, pipeline_sequence_length, model_config.hidden_size)
     
     extra_args = dict()
     if config["model"]["use_fused_adam"]:
