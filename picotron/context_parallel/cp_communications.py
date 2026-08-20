@@ -82,15 +82,13 @@ class ContextCommunicate:
             result_tensor = recv_tensor
 
         ###############################################################################
-        # TODO: Build the two P2POp descriptors for this ring step:                   #
+        # [Part 2] TODO: Build the two P2POp descriptors for this ring step:                   #
         #   - one that will isend `tensor_to_send` to `self.send_rank`                #
         #   - one that will irecv into `result_tensor` from `self.recv_rank`          #
         # Both must use group=pgm.process_group_manager.cp_group.                     #
         # Hint: https://docs.pytorch.org/docs/2.13/distributed.html#torch.distributed.P2POp
         ###############################################################################
-        send_operation = dist.P2POp(dist.isend, tensor_to_send, self.send_rank, group=pgm.process_group_manager.cp_group)
-        recv_operation = dist.P2POp(dist.irecv, result_tensor, self.recv_rank, group=pgm.process_group_manager.cp_group)
-        # raise NotImplementedError
+        raise NotImplementedError
         ################################################################################
         #                                 END OF YOUR CODE                             #
         ################################################################################
@@ -106,13 +104,13 @@ class ContextCommunicate:
     def commit(self):
         if self._active_requests is not None: raise RuntimeError("Commit called twice")
         ###############################################################################
-        # TODO: Launch all queued operations in `self._pending_operations` as a       #
+        # [Part 2] TODO: Launch all queued operations in `self._pending_operations` as a       #
         # single batched P2P call, and store the returned request handles in         #
         # `self._active_requests`.     #
         # Hint: https://docs.pytorch.org/docs/2.13/distributed.html#torch.distributed.batch_isend_irecv
         ###############################################################################
-        self._active_requests = dist.batch_isend_irecv(self._pending_operations)
-        # raise NotImplementedError
+
+        raise NotImplementedError
         ################################################################################
         #                                 END OF YOUR CODE                             #
         ################################################################################

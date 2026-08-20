@@ -90,18 +90,19 @@ if __name__ == "__main__":
 
     backend = "gloo" if config["distributed"]["use_cpu"] else "nccl"
     if config["distributed"]["cp_seq_padding_en"]:
-        seq_length = config["training"]["seq_length"]
-        cp_size = config["distributed"]["cp_size"]
-        remainder = seq_length % cp_size
-        pad_len = (cp_size - remainder) % cp_size
-        padded_seq_length = seq_length + pad_len
-        config["training"]["seq_length"] = padded_seq_length
-        if pad_len > 0:
-        # Keep the originally requested value around only for logging/debugging
-            config["training"]["seq_length_requested"] = seq_length
-            config["training"]["seq_length"] = seq_length + pad_len
-            print(f"[CP] Rounding seq_length from {seq_length} to "
-            f"{config['training']['seq_length']} to be divisible by cp_size ({cp_size})")
+        ###############################################################################
+        # TODO: Support sequence padding for Context Parallelism.                     #
+        #                                                                             #
+        # When `cp_seq_padding_en` is enabled, adjust the configured sequence length  #
+        # so that it is divisible by the CP world size before batches are prepared.   #
+        #                                                                             #
+        # Hint: Update `config["training"]["seq_length"]` directly here, before the    #
+        # dataloader constructs training batches.                                     #
+        ###############################################################################
+        raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
     else:
         assert config["training"]["seq_length"] % config["distributed"]["cp_size"] == 0, "seq_length must be divisible by cp_size for Context Parallelism"
 

@@ -22,25 +22,26 @@ def apply_tensor_parallel(model, sequence_parallel=False):
 
     def _replace_fused_qkv(attention_module):
         """
-        NEW: replace attention.qkv_proj (plain nn.Linear from FuseQKVAttention)
-        with a TP-aware FusedQKVColumnParallelLinear, and update the attention
-        module's cached _qkv_split_sizes to the SHARDED (per-rank) sizes so
-        forward()'s torch.split works on the sharded output, not the original
-        full-size split computed in FuseQKVAttention.__init__.
+        Replace the fused QKV projection with a tensor-parallel implementation.
+
+        The attention module originally assumes that qkv_proj produces the full
+        [Q | K | V] output. After tensor parallelism is applied, each rank only
+        produces its local Q/K/V shards, so the attention module must also use
+        the corresponding per-rank split sizes.
         """
         linear_layer = attention_module.qkv_proj
-        new_linear_layer = FusedQKVColumnParallelLinear(
-            in_features=linear_layer.in_features,
-            num_heads=attention_module.num_heads,
-            num_key_value_heads=attention_module.num_key_values,
-            head_dim=attention_module.head_dim,
-            bias=linear_layer.bias is not None,
-            sequence_parallel=sequence_parallel,
-        )
-        attention_module.qkv_proj = new_linear_layer
-        # CHANGED: was the full (q_out, kv_out, kv_out) computed pre-TP;
-        # now must reflect this rank's local shard sizes.
-        attention_module._qkv_split_sizes = new_linear_layer.qkv_split_sizes_per_partition
+        ###############################################################################
+        # TODO: Create a tensor-parallel fused QKV projection to replace the original #
+        # nn.Linear layer.                                                            #
+        #                                                                             #
+        # Hint: Use the attention module's head configuration and preserve relevant   #
+        # properties of the original projection, such as input size and bias.         #
+        ###############################################################################
+        raise NotImplementedError
+        ################################################################################
+        #                               END OF YOUR CODE                               #
+        ################################################################################
+        
 
     def _replace_module(_module, _linear_proj_name, _style, args={},vocab_padding_en=False):
         assert _style in ["column", "row", 'vocab']
@@ -102,13 +103,18 @@ def apply_tensor_parallel(model, sequence_parallel=False):
         layer.input_layernorm.sequence_parallel = sequence_parallel
         layer.post_attention_layernorm.sequence_parallel = sequence_parallel
         if model.model_config.fuse_qkv_en:
-            _replace_fused_qkv(layer.attention)
-            _replace_module(layer.attention, "out_proj", "row")
-            _replace_module(layer.mlp, "up_proj", "column")
-            _replace_module(layer.mlp, "gate_proj", "column")
-            _replace_module(layer.mlp, "down_proj", "row")
-       
-            
+            ###############################################################################
+            # TODO: Apply tensor-parallel replacements to the fuse qkv attention and      #
+            # MLP modules.                                                                #
+            #                                                                             #
+            # Hint: Pay attention to whether each linear layer should be partitioned      #
+            # along its input or output dimension, and handle the fused QKV projection    #
+            # separately.                                                                 #
+            ###############################################################################
+            raise NotImplementedError
+            ################################################################################
+            #                                 END OF YOUR CODE                             #
+            ################################################################################
         else:
             for module_name, linear_proj_name, style in module_linear_name_stype_mapping_list:
                 _replace_module(getattr(layer, module_name), linear_proj_name, style)
@@ -283,6 +289,9 @@ class RowParallelLinear(nn.Module):
         return output if bias is None else output + bias
     
 class VocabParallelEmbeddingPadding(nn.Module):
+    '''
+    VocabParallelEmbedding padding version
+    '''
     def __init__(
             self,
             num_embeddings: int,
@@ -306,37 +315,41 @@ class VocabParallelEmbeddingPadding(nn.Module):
             self.scale_grad_by_freq = scale_grad_by_freq
             self.sparse = sparse
 
-            # Pad vocabulary size so that it is divisible by TP world size.
-            self.padded_num_embeddings = (math.ceil(self.num_embeddings / self.tp_world_size)* self.tp_world_size)
-            
 
+            
+            ###############################################################################
+            # TODO: Pad the global vocabulary size so that it can be evenly partitioned   #
+            # across all TP ranks.                                                        #
+            #                                                                             #
+            # Hint: The padded vocabulary size should be the smallest value >= the        #
+            # original vocabulary size that is divisible by tp_world_size.                #
+            ###############################################################################
+            # Step1: Pad vocabulary size so that it is divisible by TP world size.
+            self.padded_num_embeddings = None
             # Divide the weight matrix along the vocaburaly dimension.
-            self.vocab_start_index, self.vocab_end_index = self._vocab_range_from_global_vocab_size(
-                self.num_embeddings, pgm.process_group_manager.tp_rank, pgm.process_group_manager.tp_world_size
-            )
-            self.num_embeddings_per_partition = self.vocab_end_index - self.vocab_start_index
-    
-            self.weight = nn.Parameter(torch.Tensor(self.num_embeddings_per_partition, self.embedding_dim))
-            debug_test(
-                f"[Vocab][rank {self.tp_rank}] "
-                f"original_vocab={self.num_embeddings}, "
-                f"padded_vocab={self.padded_num_embeddings}, "
-                f"world_size={self.tp_world_size}, "
-                f"local_range=[{self.vocab_start_index}, {self.vocab_end_index}), "
-                f"local_vocab_size={self.num_embeddings_per_partition}, "
-                f"padding_rows={max(0, self.vocab_end_index - self.num_embeddings)}"
-            )
+            # Hine: use `_vocab_range_from_global_vocab_size`
+            self.vocab_start_index, self.vocab_end_index =  None,None 
+            # Step2: Divide the weight matrix along the vocaburaly dimension.
+            raise NotImplementedError
+            ################################################################################
+            #                                 END OF YOUR CODE                             #
+            ################################################################################
             self.reset_parameters()
         
     def _vocab_range_from_global_vocab_size(self, global_vocab_size: int, rank: int, world_size: int):
          
-        padded_vocab_size = (
-            math.ceil(global_vocab_size / world_size) * world_size
-        )
-        per_partition_vocab_size = padded_vocab_size // world_size
-        # vocab_range_from_per_partition_vocab_size
-        index_f = rank * per_partition_vocab_size
-        index_l = index_f + per_partition_vocab_size
+        ###############################################################################
+        # TODO: Compute the [start, end) vocabulary range assigned to `rank`.         #
+        #                                                                             #
+        # Hint: First reason about the vocabulary size after padding, then divide     #
+        # that range evenly across TP ranks.                                          #
+        ###############################################################################
+        raise NotImplementedError
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
+       
+    
         return index_f, index_l
 
     def reset_parameters(self):
@@ -355,10 +368,6 @@ class VocabParallelEmbeddingPadding(nn.Module):
         # Split the model into size of self.num_embeddings_per_partition
         weight_list = torch.split(master_weight, self.num_embeddings_per_partition, dim=0)
         self.weight.data = weight_list[self.tp_rank].contiguous()
-        debug_test(
-            f"[Vocab][rank {self.tp_rank}] "
-            f"embedding_weight_shape={tuple(self.weight.shape)}"
-        )
     def forward(self, x):
         """
         Performs an embedding lookup for input tokens in the parallelized embedding layer
@@ -367,10 +376,20 @@ class VocabParallelEmbeddingPadding(nn.Module):
         3. Reduces the embeddings across model parallel GPUs using all-reduce for synchronization
         """
         # Build the mask for out-of-vocabulary tokens.
-        input_mask = (x < self.vocab_start_index) | (x >= self.vocab_end_index)
-        # padded token IDs >= original num_embeddings are not real tokens.
-        invalid_token_mask = x >= self.num_embeddings
-        input_mask = input_mask | invalid_token_mask
+        
+        ###############################################################################
+        # TODO: Compute `input_mask`.                                                  #
+        #                                                                             #
+        # `input_mask` should identify tokens that should NOT be looked up by this     #
+        # TP rank. Consider both:                                                      #
+        #   - tokens outside this rank's vocabulary range                              #
+        #   - token IDs that belong only to the padded vocabulary region               #
+        ###############################################################################
+        input_mask = None
+        
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
         # Mask the input.
         masked_input = x.clone() - self.vocab_start_index
         masked_input[input_mask] = 0
@@ -381,22 +400,31 @@ class VocabParallelEmbeddingPadding(nn.Module):
                 local_padding_idx = (
                     self.padding_idx - self.vocab_start_index
                 )
-        output_parallel = F.embedding(
-            masked_input,
-            self.weight,
-            local_padding_idx,
-            self.max_norm,
-            self.norm_type,
-            self.scale_grad_by_freq,
-            self.sparse,
-        )
-        # Embedding of out-of-vocabulary tokens is set to 0.
-        output_parallel[input_mask, :] = 0.0
-        output = ReduceFromModelParallelRegion.apply(output_parallel)
+        ###############################################################################
+        # TODO: Compute `output`.                                                     #
+        #                                                                             #
+        # Your implementation should:                                                 #
+        #   1. Perform the local embedding lookup using `masked_input`.               #
+        #   2. Zero out results corresponding to tokens not owned by this TP rank.    #
+        #   3. Combine the partial embedding outputs across all TP ranks.             #
+        #                                                                             #
+        # Hint: Use `local_padding_idx` when calling F.embedding. After masking,      #
+        # exactly one TP rank should contribute the embedding for each valid token.   #
+        ###############################################################################
+        output = None
+        ################################################################################
+        #                                 END OF YOUR CODE                             #
+        ################################################################################
         return output
     
 
 class VocabPadFinalOutput(nn.Module):
+    """
+    Tensor-parallel final projection with vocabulary padding.
+
+    If the vocabulary size is not divisible by the TP world size, pad the
+    vocabulary so that each TP rank owns an equal-sized output partition.
+    """
     def __init__(
         self,
         in_features: int,
@@ -641,6 +669,7 @@ class FusedQKVColumnParallelLinear(nn.Module):
         self.num_heads = num_heads
         self.num_key_value_heads = num_key_value_heads
         self.head_dim = head_dim
+
 
         self.heads_per_partition = num_heads // self.tp_world_size
         self.kv_heads_per_partition = num_key_value_heads // self.tp_world_size

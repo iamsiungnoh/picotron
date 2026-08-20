@@ -107,27 +107,33 @@ class FuseQKVAttention(nn.Module):
         self.num_local_heads = config.num_attention_heads // pgm.process_group_manager.tp_world_size # TP parallelism
         self.num_local_kv_heads = config.num_key_value_heads // pgm.process_group_manager.tp_world_size # TP parallelism
 
-        q_out = self.num_heads * self.head_dim
-        kv_out = self.num_key_values * self.head_dim
-        self.qkv_proj = nn.Linear(config.hidden_size, q_out + 2 * kv_out, bias=False)
-        self._qkv_split_sizes = (q_out, kv_out, kv_out)  # used in forward() to torch.split back apart
 
+        ###############################################################################
+        # TODO: Implement the fused QKV projection.                                   #
+        #                                                                             #
+        # Instead of using three separate linear layers for Q, K, and V, construct    #
+        # one linear layer whose output stores the three projections consecutively:   #
+        #                                                                             #
+        #     [ Q | K | V ]                                                           #
+        #                                                                             #
+        # Your implementation should:                                                 #
+        #   1. Determine the output dimension of Q from the number of attention heads.#
+        #   2. Determine the output dimensions of K and V from the number of KV heads.#
+        #   3. Create a single linear projection producing the concatenated Q/K/V.    #
+        #   4. Record the split sizes needed to recover Q, K, and V in forward().      #
+        #                                                                             #
+        # Hint: Do not assume Q, K, and V have the same output size. In models using  #
+        # grouped-query or multi-query attention, the number of KV heads can be       #
+        # smaller than the number of query heads.                                     #
+        ###############################################################################
+        raise NotImplementedError
+        ################################################################################
+        #                               END OF YOUR CODE                               #
+        ################################################################################
+        ##########################################################
         self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         self.layer_idx = layer_idx
-        debug_test(
-            f"[FuseQKVAttention][layer={layer_idx}] "
-            f"hidden_size={self.hidden_size}, "
-            f"num_heads={self.num_heads}, "
-            f"num_kv_heads={self.num_key_values}, "
-            f"head_dim={self.head_dim}, "
-            f"local_heads={self.num_local_heads}, "
-            f"local_kv_heads={self.num_local_kv_heads}, "
-            f"q_out={q_out}, "
-            f"k_out={kv_out}, "
-            f"v_out={kv_out}, "
-            f"fused_out={q_out + 2 * kv_out}, "
-            f"qkv_weight_shape={tuple(self.qkv_proj.weight.shape)}"
-        )
+        self.config = config
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -135,14 +141,30 @@ class FuseQKVAttention(nn.Module):
                     k = 1 / tensor.size(1)
                     bound = math.sqrt(k)
                     torch.nn.init.uniform_(tensor, -bound, bound)
-        _init_weights(self.qkv_proj.weight)
-        _init_weights(self.out_proj.weight)
+        #################################################################################
+        # TODO: Initialize the weights of the fused QKV projection and output           #
+        # projection.                                                                   #
+        # ###############################################################################                                                 #
+        raise NotImplementedError
+        ################################################################################
+        #                               END OF YOUR CODE                               #
+        ################################################################################
 
     def forward(self, x, cos, sin, attention_mask=None, position_ids=None):
-        batch_size, seq_length, hidden_dim = x.size()
-        qkv = self.qkv_proj(x)  # [batch_size, seq_length, q_out + 2*kv_out], ONE matmul instead of three
-        batch_size, seq_length, _ = qkv.shape
-        q, k, v = torch.split(qkv, self._qkv_split_sizes, dim=-1)
+        ###############################################################################
+        # TODO: Compute the fused QKV projection and recover Q, K, and V.             #
+        #                                                                             #
+        # Your implementation should:                                                 #
+        #   1. Apply the fused QKV projection to the input hidden states.             #
+        #   2. Split the fused output back into Q, K, and V using the configured      #
+        #      split sizes.                                                           #      
+        # ################################################################################                                         #
+        batch_size, seq_length = None,None
+        raise NotImplementedError
+        ################################################################################
+        #                               END OF YOUR CODE                               #
+        ################################################################################
+
         if os.getenv('FLASH_ATTEN', '1') != '1':
             q = q.view(batch_size, seq_length, self.num_local_heads, self.head_dim).transpose(1, 2)       # [batch_size, num_heads, seq_length, head_dim]
             k = k.view(batch_size, seq_length, self.num_local_kv_heads, self.head_dim).transpose(1, 2)  # [batch_size, num_key_values, seq_length, head_dim]
@@ -318,7 +340,16 @@ class DecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         if config.fuse_qkv_en:
-            self.attention = FuseQKVAttention(config, layer_idx = layer_idx)
+            ###############################################################################
+            # TODO: Use the fused-QKV attention implementation when QKV fusion is enabled.#
+            #                                                                             #
+            # Hint: Instantiate the attention module that computes Q, K, and V with a     #
+            # single fused projection.                                                    #
+            ###############################################################################
+            raise NotImplementedError
+            ################################################################################
+            #                               END OF YOUR CODE                               #
+            ################################################################################
         else:
             self.attention = Attention(config, layer_idx = layer_idx)
         self.mlp = MLP(config)

@@ -110,20 +110,24 @@ class MicroBatchDataLoader(DataLoader):
         target_ids = batch_input_ids[:, start_idx+1:end_idx+1].contiguous()
         position_ids = torch.arange(start_idx, end_idx, dtype=torch.long).unsqueeze(0).expand(batch_size, -1).contiguous() 
         if self.cp_zigzag_en:
-            indices = get_zigzag_indices(
-                self.seq_length,
-                pgm.process_group_manager.cp_rank,
-                pgm.process_group_manager.cp_world_size,
-            )
-            input_ids = batch_input_ids[:, indices].contiguous()
-            target_ids = batch_input_ids[:, indices + 1].contiguous()
-            position_ids = (
-                indices
-                .unsqueeze(0)
-                .expand(batch_size, -1)
-                .contiguous()
-            )
-
+            ###############################################################################
+            # TODO: Prepare the local sequence shard for zigzag Context Parallelism.      #
+            #                                                                             #
+            # Your implementation should:                                                 #
+            #   1. Compute the global token indices assigned to this CP rank.             #
+            #   2. Use these indices to select the local input tokens.                    #
+            #   3. Construct the corresponding next-token prediction targets.             #
+            #   4. Preserve the original global token positions in `position_ids`.        #
+            #                                                                             #
+            # Hint: The local sequence is no longer a contiguous slice of the original    #
+            # sequence, so input_ids, target_ids, and position_ids must all follow the    #
+            # same zigzag index assignment.                                               #
+            # Remeber to use `get_zigzag_indices` here                                    #
+            ###############################################################################
+            raise NotImplementedError
+            ################################################################################
+            #                               END OF YOUR CODE                               #
+            ################################################################################
 
         return {
             "input_ids": input_ids,
