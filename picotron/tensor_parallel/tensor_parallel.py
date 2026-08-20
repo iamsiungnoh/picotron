@@ -672,23 +672,45 @@ class FusedQKVColumnParallelLinear(nn.Module):
         self.num_key_value_heads = num_key_value_heads
         self.head_dim = head_dim
 
+        ###############################################################################
+        # TODO: Compute the local fused-QKV dimensions for this TP rank.     #
+        #                                                                             #
+        # Each TP rank should own a whole number of query heads and KV heads.         #
+        # Determine:                                                                  #
+        #   - the number of local Q heads                                              #
+        #   - the number of local KV heads                                             #
+        #   - the corresponding Q and KV projection sizes                             #
+        #   - the total fused output size for this rank                               #
+        #                                                                             #
+        # Hint: Q and KV may have different numbers of heads. Do not assume the       #
+        # local Q, K, and V projection sizes are equal.                               #
+        ###############################################################################
+        raise NotImplementedError 
+        self.heads_per_partition = None
+        self.kv_heads_per_partition = None
 
-        self.heads_per_partition = num_heads // self.tp_world_size
-        self.kv_heads_per_partition = num_key_value_heads // self.tp_world_size
+        self.q_size_per_partition = None
+        self.kv_size_per_partition = None
+        self.output_size_per_partition =   None
+        self.out_features =   None
+        
+        ################################################################################
+        #                               END OF YOUR CODE                              #
+        ################################################################################
 
-        self.q_size_per_partition = self.heads_per_partition * head_dim
-        self.kv_size_per_partition = self.kv_heads_per_partition * head_dim
-        self.output_size_per_partition = self.q_size_per_partition + 2 * self.kv_size_per_partition
-        self.out_features = num_heads * head_dim + 2 * num_key_value_heads * head_dim
+        ###############################################################################
+        # TODO: Record the local split sizes for the fused [Q | K | V]                #
+        # output.                                                                     #
+        #                                                                             #
+        # FuseQKVAttention.forward() will use these sizes to split the local fused    #
+        # projection back into Q, K, and V.                                           #
+        ###############################################################################
 
-        # NEW: per-rank split sizes, consumed by FuseQKVAttention.forward() via
-        # attention_module._qkv_split_sizes (set by apply_tensor_parallel after replacement)
-        self.qkv_split_sizes_per_partition = (
-            self.q_size_per_partition,
-            self.kv_size_per_partition,
-            self.kv_size_per_partition,
-        )
-
+        self.qkv_split_sizes_per_partition = None
+        raise NotImplementedError 
+        ################################################################################
+        #                               END OF YOUR CODE                               #
+        ################################################################################
         self.async_all_reduce = async_all_reduce
         self.gather_output = False  # QKV output stays local per rank; used directly for local attention heads
 
@@ -703,6 +725,7 @@ class FusedQKVColumnParallelLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
+        # Initialize weight tensor with the default initialization method used for nn.Linear in PyTorch
         q_out = self.num_heads * self.head_dim
         kv_out = self.num_key_value_heads * self.head_dim
 
@@ -715,17 +738,23 @@ class FusedQKVColumnParallelLinear(nn.Module):
         torch.nn.init.uniform_(master_k, -bound, bound)
         torch.nn.init.uniform_(master_v, -bound, bound)
 
-        # Split each of Q, K, V independently into tp_world_size whole-head
-        # chunks, THEN concatenate this rank's Q/K/V chunks together.
-        q_chunks = torch.split(master_q, self.q_size_per_partition, dim=0)
-        k_chunks = torch.split(master_k, self.kv_size_per_partition, dim=0)
-        v_chunks = torch.split(master_v, self.kv_size_per_partition, dim=0)
+        ###############################################################################
+        # TODO: Construct this TP rank's local fused QKV weight.                      #
+        #                                                                             #
+        # Q, K, and V must be partitioned independently across TP ranks so that each  #
+        # rank receives complete attention heads from all three projections.          #
+        ###############################################################################
+        q_chunks = None
+        k_chunks = None
+        v_chunks = None
 
-        local_weight = torch.cat(
-            [q_chunks[self.tp_rank], k_chunks[self.tp_rank], v_chunks[self.tp_rank]],
-            dim=0,
-        )
-        self.weight.data = local_weight.contiguous()
+        local_weight = None
+
+        self.weight.data = None
+        raise NotImplementedError 
+        ################################################################################
+        #                               END OF YOUR CODE                               #
+        ################################################################################
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.sequence_parallel:
