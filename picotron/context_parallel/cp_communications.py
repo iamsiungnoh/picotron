@@ -8,7 +8,7 @@ import picotron.process_group_manager as pgm
 STEP, VERBOSE = 0, os.environ.get("VERBOSE", "0") == "1"
 
 ####################################################################################
-###                 Given AlltoALL implementation, do not modify                 ###
+###           AlltoALL implementation for Headwise Context Parallelism           ###
 ####################################################################################
 
 def _all_to_all(input_, group):
@@ -60,7 +60,7 @@ def all_to_all(input_, group=None):
     return AllToAll.apply(input_, group)
 
 ####################################################################################
-###                     END of Given AlltoALL implementation.                    ###
+###                        END of AlltoALL implementation.                       ###
 ####################################################################################
 
 class ContextCommunicate:

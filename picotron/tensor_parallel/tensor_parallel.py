@@ -203,10 +203,12 @@ class ColumnParallelLinear(torch.nn.Module):
         self.weight.data = weight_list[self.tp_rank].contiguous()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:  
-        if self.sequence_parallel:
-            input_parallel = GatherFromSequenceParallelRegion.apply(x)
-            output = F.linear(input_parallel, self.weight, self.bias)
-        elif self.async_all_reduce:
+        ########################################################################
+        # [TP + sequence parallelism: ColunmParallelLinear]                    #
+        # TODO: Patch the forward pass for the ColumnParallelLinear layer      #
+        #       to enable sequencel parallelism                                #
+        ########################################################################
+        if self.async_all_reduce:
             output = linear_with_async_all_reduce(x, self.weight, self.bias) 
         else:
             output = linear_with_all_reduce(x, self.weight, self.bias) 
@@ -275,17 +277,17 @@ class RowParallelLinear(nn.Module):
         self.weight.data = weight_list[self.tp_rank].contiguous()
 
     def forward(self, x):
+        ########################################################################
+        # [TP + sequence parallelism: RowParallelLinear]                       #
+        # TODO: Patch the forward pass for the RowParallelLinear layer         #
+        #       to enable sequencel parallelism                                #
+        ########################################################################
+    
         # X_i * W_i^T + b
         output_parallel = F.linear(x, self.weight)
-        if self.sequence_parallel:
-            output = ReduceScatterToSequenceParallelRegion.apply(output_parallel)
-            # The bias is replicated across TP ranks, while each rank sees only
-            # a sequence shard. Sum its gradient across TP in backward.
-            bias = None if self.bias is None else CopyToModelParallelRegion.apply(self.bias)
-        else:
-            # All-reduce across all the partitions.
-            output = ReduceFromModelParallelRegion.apply(output_parallel)
-            bias = self.bias
+        # All-reduce across all the partitions.
+        output = ReduceFromModelParallelRegion.apply(output_parallel)
+        bias = self.bias
         return output if bias is None else output + bias
     
 class VocabParallelEmbeddingPadding(nn.Module):

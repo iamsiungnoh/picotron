@@ -28,15 +28,19 @@ class Bucket:
         """
         assert self.handle is None
         ####################################################################################
-        ###                TODO: Implement async gradient sync operations                ###
-        ###                1. average gradients                                          ###
-        ###                2. async all reduce (use async_op=True, use self.handle)      ###
+        # [Part 2]                                                                         #
+        # TODO: Synchronize this bucket's gradients asynchronously.                        #
+        # 1. Scale `self.grad_data` in place by `1 / self.process_group_size` so the sum   #
+        #    produced by all-reduce becomes an average.                                    #
+        # 2. Launch an asynchronous all-reduce on `self.grad_data` using                   #
+        #    `self.process_group`.                                                         #
+        # 3. Store the returned asynchronous work handle in `self.handle`.                 #
         ####################################################################################
-        self.grad_data /= self.process_group_size
-        self.handle = dist.all_reduce(self.grad_data, group=self.process_group, async_op=True)
+        
+        raise NotImplementedError
 
         ####################################################################################
-        ###                            END of Implementation.                            ###
+        #                            END of Implementation.                                #
         ####################################################################################
     
     def reset(self) -> None:
@@ -163,5 +167,4 @@ class BucketManager:
         """
         bucket_idx = self.params_to_bucket_location[param][2]
         self.buckets[bucket_idx].mark_param_as_ready(param)
-
 

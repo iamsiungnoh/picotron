@@ -1,3 +1,5 @@
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -45,18 +47,24 @@ class PipelineParallel(nn.Module):
         Returns the layer indices that should be processed by this GPU.
         """
 
-        ####################################################################################
-        ###                TODO: Implement layers_per_gpu and start_layer                ###
-        ####################################################################################
+        ##########################################################################################
+        # [Part 2]                                                                               #
+        # TODO: Implement the following                                                          #
+        # 1. layers_per_gpu: Build a list containing the number of layers assigned to each       #
+        #                    pipeline rank. Distribute any remainder one layer at a time,        #
+        #                    starting from rank 0.                                               #
+        # 2. start_layer: Compute the zero-based index of the first layer assigned to the        #
+        #                 current pipeline rank.                                                 #
+        ##########################################################################################
 
         # Calculate layers per GPU, handling uneven distribution
         layers_per_gpu = [num_layers // pgm.process_group_manager.pp_world_size + (1 if i < num_layers % pgm.process_group_manager.pp_world_size else 0) for i in range(pgm.process_group_manager.pp_world_size)]
         # Calculate starting layer for this GPU
         start_layer = sum(layers_per_gpu[:pgm.process_group_manager.pp_rank])
 
-        ####################################################################################
-        ###                            END of Implementation.                            ###
-        ####################################################################################
+        #########################################################################################
+        #                            END of Implementation                                      #
+        #########################################################################################
         
         return list(range(start_layer, start_layer + layers_per_gpu[pgm.process_group_manager.pp_rank]))
 

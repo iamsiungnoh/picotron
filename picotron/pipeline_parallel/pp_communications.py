@@ -9,33 +9,37 @@ def pipeline_communicate(operation, device, dtype, tensor=None, shapes=None):
     global STEP
     global VERBOSE
 
-    ####################################################################################
-    ###            TODO: Implement communication logic for each operation            ###
-    ###            1. set src/dst rank for each case                                 ###
-    ###            2. create empty tensor if receiving data from other ranks         ###
-    ###            (keep requires_grad=True for the empty tensors)                   ###
-    ###            hint: first/last stage handling is needed                         ###
-    ####################################################################################
-    
+    ########################################################################################
+    # [Part 2]                                                                             #
+    # TODO: Prepare the point-to-point communication for the requested operation.          #
+    # 1. Handle pipeline boundaries: the first stage cannot receive forward activations    #
+    #    or send backward gradients, and the last stage cannot send forward activations    #
+    #    or receive backward gradients. Return None for these no-op cases.                 #
+    # 2. Based on the operation and its direction, select the neighboring pipeline rank    #
+    #    and assign it to `src` for a receive or `dest` for a send. Forward communication  #
+    #    moves toward the next stage; backward communication moves toward the previous     #
+    #    stage.                                                                            #
+    # 3. For a receive operation, assign `tensor` to a newly allocated empty tensor using  #
+    #    `shapes`, `device`, and `dtype`, with `requires_grad=True`. For a send operation, #
+    #    preserve the `tensor` supplied by the caller.                                     #
+    # The common code below performs the asynchronous P2P operation and waits for it.      #
+    ########################################################################################
+
+    src = None
+    dest = None
 
     if operation == 'recv_forward':
-        if pgm.process_group_manager.pp_is_first_stage: return None
-        tensor = torch.empty(shapes, requires_grad=True, device=device, dtype=dtype)
-        src = pgm.process_group_manager.pp_prev_rank
+        raise NotImplementedError
     elif operation == 'send_forward':
-        if pgm.process_group_manager.pp_is_last_stage: return
-        dest = pgm.process_group_manager.pp_next_rank
+        raise NotImplementedError
     elif operation == 'recv_backward':
-        if pgm.process_group_manager.pp_is_last_stage: return None
-        tensor = torch.empty(shapes, requires_grad=True, device=device, dtype=dtype)
-        src = pgm.process_group_manager.pp_next_rank
+        raise NotImplementedError
     elif operation == 'send_backward':
-        if pgm.process_group_manager.pp_is_first_stage: return
-        dest = pgm.process_group_manager.pp_prev_rank
+        raise NotImplementedError
 
-    ####################################################################################
-    ###                            END of Implementation.                            ###
-    ####################################################################################
+    #######################################################################################
+    #                                END of Implementation.                               #
+    #######################################################################################
 
     is_send = operation.startswith('send')
     peer_rank = dest if is_send else src

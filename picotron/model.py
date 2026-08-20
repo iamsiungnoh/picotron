@@ -426,9 +426,13 @@ class Llama(nn.Module):
         self.final_proj.reset_parameters()
 
     def forward(self, input_ids, attention_mask=None, position_ids: torch.Tensor = None):
+
+        ########################################################################
+        # [TP + sequence parallelism]                                          #
+        # TODO: Patch the forward pass to enable sequence parallelism          #
+        ########################################################################
+
         x = self.embedding(input_ids)
-        if self.sequence_parallel:
-            x = ScatterToSequenceParallelRegion.apply(x)
         for layer in self.decoder_layers:
             x = layer(x)  # [batch_size, seq_length, hidden_dim]
         x = self.final_norm(x)
