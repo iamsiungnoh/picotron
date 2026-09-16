@@ -31,6 +31,7 @@ def create_single_config(
     use_wandb: bool = False,
     use_cpu: bool = False,
     use_fused_adam: bool = False,
+    disable_flash_attention: bool = False,
     hf_token: str = None,
     vocab_padding_en = False,
     cp_seq_padding_en = False,
@@ -56,6 +57,7 @@ def create_single_config(
     config_content["model"]["num_hidden_layers"] = tmp_model_config.num_hidden_layers if num_hidden_layers is None else num_hidden_layers
     config_content["model"]["num_attention_heads"] = tmp_model_config.num_attention_heads if num_attention_heads is None else num_attention_heads
     config_content["model"]["num_key_value_heads"] = tmp_model_config.num_key_value_heads if num_key_value_heads is None else num_key_value_heads
+    config_content["model"]["use_flash_attention"] = not disable_flash_attention
     config_content["model"]["use_fused_adam"] = use_fused_adam
     config_content["model"]["vocab_padding_en"] = vocab_padding_en
     config_content["model"]["fuse_qkv_en"] = fuse_qkv_en
@@ -71,8 +73,8 @@ def create_single_config(
     config_content['distributed']['pp_engine'] = pp_engine
     config_content['distributed']['use_cpu'] = use_cpu
     config_content["distributed"]["cp_seq_padding_en"] = cp_seq_padding_en
+    config_content["environment"]["FLASH_ATTEN"] = "0" if disable_flash_attention or use_cpu else "1"
     if use_cpu:
-        config_content["environment"]["FLASH_ATTEN"] = "0"
         config_content["distributed"]["backend"] = "gloo"
 
     config_content['logging']['use_wandb'] = use_wandb
@@ -115,6 +117,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", action="store_true", help="Use wandb for logging")
     parser.add_argument("--use_cpu", action="store_true", help="Use CPU for training")
     parser.add_argument("--use_fused_adam", action="store_true", help="Use fused adam")
+    parser.add_argument("--disable_flash_attention", action="store_true", help="Use PyTorch scaled dot product attention instead of FlashAttention")
     parser.add_argument("--hf_token", type=str, help="HF token")
     parser.add_argument(
     "--vocab_padding_en",
@@ -161,6 +164,7 @@ if __name__ == "__main__":
         use_wandb=args.use_wandb,
         use_cpu=args.use_cpu,
         use_fused_adam=args.use_fused_adam,
+        disable_flash_attention=args.disable_flash_attention,
         hf_token=args.hf_token,
         vocab_padding_en=args.vocab_padding_en,
         cp_seq_padding_en=args.cp_seq_padding_en,
