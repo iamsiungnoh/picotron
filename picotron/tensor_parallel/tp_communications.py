@@ -158,8 +158,7 @@ class ReduceFromModelParallelRegion(torch.autograd.Function):
         # # [Part 2] TODO: All-reduce `x` (sum) across the tensor-parallel group                 #
         # Hint: dist.all_reduce https://docs.pytorch.org/docs/2.13/distributed.html#torch.distributed.all_reduce
         ###############################################################################
-        dist.all_reduce(x, op=dist.ReduceOp.SUM, group=pgm.process_group_manager.tp_group)
-        # raise NotImplementedError
+        raise NotImplementedError
         ################################################################################
         #                                 END OF YOUR CODE                             #
         ################################################################################
