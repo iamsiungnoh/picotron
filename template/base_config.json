@@ -25,6 +25,8 @@
     },
     "training": {
         "seed": 42,
+        "optimizer_type": "sgd",
+        "momentum": 0.9,
         "learning_rate": 3e-4,
         "total_train_steps": 10,
         "seq_length": 1024,

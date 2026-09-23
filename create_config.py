@@ -30,6 +30,8 @@ def create_single_config(
     sequence_parallel: bool = False,
     use_wandb: bool = False,
     use_cpu: bool = False,
+    optimizer_type: str = "sgd",
+    momentum: float = 0.9,
     use_fused_adam: bool = False,
     disable_flash_attention: bool = False,
     hf_token: str = None,
@@ -85,7 +87,9 @@ def create_single_config(
     print(f"Gbs_token: {gbs_token:,}, Gbs: {gbs}, dp: {dp}, seq_len: {seq_len}, grad_acc_steps: {grad_acc_steps}, mbs: {mbs}")
     
     config_content['training']['gradient_accumulation_steps'] = grad_acc_steps
-    config_content['training']['micro_batch_size'] = mbs    
+    config_content['training']['micro_batch_size'] = mbs
+    config_content['training']['optimizer_type'] = optimizer_type
+    config_content['training']['momentum'] = momentum
     
     if os.path.exists(run_path):
         shutil.rmtree(run_path)
@@ -116,6 +120,8 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name", type=str, help="Experiment name", default="dummy_exp")
     parser.add_argument("--use_wandb", action="store_true", help="Use wandb for logging")
     parser.add_argument("--use_cpu", action="store_true", help="Use CPU for training")
+    parser.add_argument("--optimizer_type", choices=["adamw", "sgd", "sgd_momentum"], help="Optimizer type", default="sgd")
+    parser.add_argument("--momentum", type=float, help="Momentum for sgd_momentum optimizer", default=0.9)
     parser.add_argument("--use_fused_adam", action="store_true", help="Use fused adam")
     parser.add_argument("--disable_flash_attention", action="store_true", help="Use PyTorch scaled dot product attention instead of FlashAttention")
     parser.add_argument("--hf_token", type=str, help="HF token")
@@ -163,6 +169,8 @@ if __name__ == "__main__":
         exp_name=args.exp_name,
         use_wandb=args.use_wandb,
         use_cpu=args.use_cpu,
+        optimizer_type=args.optimizer_type,
+        momentum=args.momentum,
         use_fused_adam=args.use_fused_adam,
         disable_flash_attention=args.disable_flash_attention,
         hf_token=args.hf_token,
