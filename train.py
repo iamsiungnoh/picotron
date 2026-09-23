@@ -241,13 +241,22 @@ if __name__ == "__main__":
         pipeline_sequence_length //= pgm.process_group_manager.tp_world_size
     tensor_shapes = (data_loader.micro_batch_size, pipeline_sequence_length, model_config.hidden_size)
     
-    extra_args = dict()
-    if config["model"]["use_fused_adam"]:
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
+    optimizer_type = config["training"].get("optimizer_type", "sgd")
 
-    optimizer = AdamW(model.parameters(), lr=config["training"]["learning_rate"], **extra_args)
+    if optimizer_type == "sgd":
+        optimizer = SGD(model.parameters(), lr=config["training"]["learning_rate"])
+    elif optimizer_type == "sgd_momentum":
+        optimizer = SGD(model.parameters(), lr=config["training"]["learning_rate"], momentum=config["training"].get("momentum", 0.9))
+    elif optimizer_type == "adamw":
+        extra_args = dict()
+        if config["model"]["use_fused_adam"]:
+            fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+            use_fused = fused_available and device == 'cuda'
+            extra_args = dict(fused=True) if use_fused else dict()
+
+        optimizer = AdamW(model.parameters(), lr=config["training"]["learning_rate"], **extra_args)
+    else:
+        raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
     
     checkpoint_manager = CheckpointManager()
 
