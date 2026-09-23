@@ -227,7 +227,13 @@ if __name__ == "__main__":
 
     # patch for gradient sync so that devices in the cp_dp_group will sync gradients
     if pgm.process_group_manager.cp_dp_world_size > 1:
-        model = DataParallelBucket(model)
+        dp_engine = config["distributed"].get("dp_engine", "bucket")
+        if dp_engine == "bucket":
+            model = DataParallelBucket(model)
+        elif dp_engine == "naive":
+            model = DataParallelNaive(model)
+        else:
+            raise ValueError(f"Invalid dp_engine: {dp_engine}, must be 'bucket' or 'naive'")
     
     print(f"init model parallel time: {time.time()-start_time:.2f}s", is_print_rank=is_wandb_rank)
     

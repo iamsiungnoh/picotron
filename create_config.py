@@ -17,6 +17,7 @@ def create_single_config(
     dp: int,
     pp: int,
     pp_engine: str,
+    dp_engine: str,
     model_name: str,
     num_hidden_layers: Optional[int],
     num_attention_heads: Optional[int],
@@ -33,7 +34,7 @@ def create_single_config(
     optimizer_type: str = "sgd",
     momentum: float = 0.9,
     use_fused_adam: bool = False,
-    disable_flash_attention: bool = False,
+    disable_flash_attention: bool = True,
     hf_token: str = None,
     vocab_padding_en = False,
     cp_seq_padding_en = False,
@@ -73,6 +74,7 @@ def create_single_config(
     config_content['distributed']['dp_size'] = dp
     config_content['distributed']['pp_size'] = pp
     config_content['distributed']['pp_engine'] = pp_engine
+    config_content['distributed']['dp_engine'] = dp_engine
     config_content['distributed']['use_cpu'] = use_cpu
     config_content["distributed"]["cp_seq_padding_en"] = cp_seq_padding_en
     config_content["environment"]["FLASH_ATTEN"] = "0" if disable_flash_attention or use_cpu else "1"
@@ -109,6 +111,7 @@ if __name__ == "__main__":
     parser.add_argument("--dp", type=int, help="number of data parallelism", default=1)
     parser.add_argument("--pp", type=int, help="number of pipeline parallelism", default=1)
     parser.add_argument("--pp_engine", type=str, help="pipeline parallel engine", default="1f1b")
+    parser.add_argument("--dp_engine", choices=["bucket", "naive"], help="data parallel engine", default="bucket")
     parser.add_argument("--model_name", type=str, help="Model name to create configs for", default="JackFram/llama-160m")
     parser.add_argument("--num_hidden_layers", type=int, help="Number of hidden layers", default=None)
     parser.add_argument("--num_attention_heads", type=int, help="Number of attention heads", default=None)
@@ -123,7 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("--optimizer_type", choices=["adamw", "sgd", "sgd_momentum"], help="Optimizer type", default="sgd")
     parser.add_argument("--momentum", type=float, help="Momentum for sgd_momentum optimizer", default=0.9)
     parser.add_argument("--use_fused_adam", action="store_true", help="Use fused adam")
-    parser.add_argument("--disable_flash_attention", action="store_true", help="Use PyTorch scaled dot product attention instead of FlashAttention")
+    parser.add_argument("--enable_flash_attention", action="store_true", help="Use FlashAttention instead of PyTorch scaled dot product attention (requires an Ampere or newer GPU)")
     parser.add_argument("--hf_token", type=str, help="HF token")
     parser.add_argument(
     "--vocab_padding_en",
@@ -158,6 +161,7 @@ if __name__ == "__main__":
         dp=args.dp,
         pp=args.pp,
         pp_engine=args.pp_engine,
+        dp_engine=args.dp_engine,
         model_name=args.model_name,
         num_hidden_layers=args.num_hidden_layers,
         num_attention_heads=args.num_attention_heads,
@@ -172,7 +176,7 @@ if __name__ == "__main__":
         optimizer_type=args.optimizer_type,
         momentum=args.momentum,
         use_fused_adam=args.use_fused_adam,
-        disable_flash_attention=args.disable_flash_attention,
+        disable_flash_attention=not args.enable_flash_attention,
         hf_token=args.hf_token,
         vocab_padding_en=args.vocab_padding_en,
         cp_seq_padding_en=args.cp_seq_padding_en,
