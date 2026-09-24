@@ -380,11 +380,8 @@ class HeadwiseContextParallel:
         # shards across the context-parallel group.                                           #
         # 1. Apply `sequence_to_head` independently to Q, K, and V so each rank owns          #
         #    H/CP heads and the complete sequence.                                            #
-        # 2. Convert each tensor from [B, H/CP, S, D] to FlashAttention's expected layout     #
-        #    [B, S, H/CP, D], ensuring the tensors are contiguous.                            #
-        # 3. Call flash attention                                                             #
-        # 4. Convert the output back to [B, H/CP, S, D], then apply `head_to_sequence`        #
-        #    to restore [B, H, S/CP, D].                                                      #
+        # 2. Call attention                                                                   #
+        # 3. Apply `head_to_sequence` to restore [B, H, S/CP, D].                             #
         #######################################################################################
 
         raise NotImplementedError
